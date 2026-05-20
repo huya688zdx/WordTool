@@ -1,7 +1,7 @@
 from PySide6.QtWidgets import (
     QMainWindow, QSplitter, QWidget, QVBoxLayout, QHBoxLayout,
-    QTabWidget, QLabel, QStatusBar, QMessageBox, QMenuBar,
-    QGroupBox, QScrollArea, QDockWidget, QDialog, QDialogButtonBox,
+    QLabel, QStatusBar, QMessageBox, QMenuBar,
+    QGroupBox, QDockWidget, QDialog, QDialogButtonBox,
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QActionGroup
@@ -20,6 +20,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         I18n.instance()
+        self.llm_config = LLMConfigWidget()  # hidden, used via Settings menu
         self._setup_ui()
         self._setup_menu()
         self._setup_statusbar()
@@ -31,10 +32,11 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
         main_splitter = QSplitter(Qt.Horizontal)
 
-        # === Left panel ===
+        # === Left panel (narrow) ===
         left_widget = QWidget()
         left_layout = QVBoxLayout(left_widget)
         left_layout.setContentsMargins(4, 4, 4, 4)
+        left_layout.setSpacing(4)
 
         self.document_panel = DocumentPanel()
         left_layout.addWidget(self.document_panel)
@@ -46,25 +48,28 @@ class MainWindow(QMainWindow):
         left_layout.addWidget(self.pipeline_panel)
         left_layout.addStretch()
 
-        # === Right panel ===
+        # Min width for left panel
+        left_widget.setMinimumWidth(240)
+
+        # === Right panel (wide) ===
         right_splitter = QSplitter(Qt.Vertical)
         self.paragraph_view = ParagraphView()
         right_splitter.addWidget(self.paragraph_view)
         self.coordinate_view = CoordinateView()
         right_splitter.addWidget(self.coordinate_view)
-        right_splitter.setSizes([400, 400])
+        # Paragraph view gets more space
+        right_splitter.setSizes([500, 350])
 
         main_splitter.addWidget(left_widget)
         main_splitter.addWidget(right_splitter)
-        main_splitter.setSizes([350, 1000])
+        # Left panel ~250px, rest for right
+        main_splitter.setSizes([260, 1100])
+        main_splitter.setStretchFactor(0, 0)  # left: don't stretch
+        main_splitter.setStretchFactor(1, 1)  # right: stretch
 
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(main_splitter)
-
-        # === LLM Config (shown in left panel, not dock) ===
-        self.llm_config = LLMConfigWidget()
-        left_layout.addWidget(self.llm_config)
 
         # === Bottom dock: AI Analysis ===
         self.ai_analysis = AIAnalysisWidget()
@@ -76,11 +81,9 @@ class MainWindow(QMainWindow):
     def _setup_menu(self):
         menubar = self.menuBar()
 
-        # File menu
         self.file_menu = menubar.addMenu("")
         self.exit_action = self.file_menu.addAction("", self.close)
 
-        # Language menu
         self.lang_menu = menubar.addMenu("")
         self.lang_group = QActionGroup(self)
         self.lang_group.setExclusive(True)
@@ -95,11 +98,9 @@ class MainWindow(QMainWindow):
             if code == I18n.current_lang():
                 action.setChecked(True)
 
-        # Settings menu
         self.settings_menu = menubar.addMenu("")
         self.llm_settings_action = self.settings_menu.addAction("", self._show_llm_settings)
 
-        # Help menu
         self.help_menu = menubar.addMenu("")
         self.about_action = self.help_menu.addAction("", self._show_about)
 
@@ -129,7 +130,6 @@ class MainWindow(QMainWindow):
         self.pipeline_panel.refresh_text()
         self.paragraph_view.refresh_text()
         self.coordinate_view.refresh_text()
-        self.llm_config.refresh_text()
         self.ai_analysis.refresh_text()
         bottom = self.findChild(QDockWidget)
         if bottom:
@@ -143,25 +143,24 @@ class MainWindow(QMainWindow):
     def _show_llm_settings(self):
         dialog = QDialog(self)
         dialog.setWindowTitle(I18n.tr("settings.title"))
+        dialog.resize(750, 120)
         layout = QVBoxLayout(dialog)
 
-        llm_widget = LLMConfigWidget()
-        layout.addWidget(llm_widget)
+        llm_copy = LLMConfigWidget()
+        llm_copy.api_key_input.setText(self.llm_config.get_api_key())
+        llm_copy.base_url_input.setText(self.llm_config.get_base_url())
+        llm_copy.model_input.setText(self.llm_config.get_model())
+        layout.addWidget(llm_copy)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(dialog.accept)
         buttons.rejected.connect(dialog.reject)
         layout.addWidget(buttons)
 
-        # Sync with current config
-        llm_widget.api_key_input.setText(self.llm_config.get_api_key())
-        llm_widget.base_url_input.setText(self.llm_config.get_base_url())
-        llm_widget.model_input.setText(self.llm_config.get_model())
-
         if dialog.exec() == QDialog.Accepted:
-            self.llm_config.api_key_input.setText(llm_widget.get_api_key())
-            self.llm_config.base_url_input.setText(llm_widget.get_base_url())
-            self.llm_config.model_input.setText(llm_widget.get_model())
+            self.llm_config.api_key_input.setText(llm_copy.get_api_key())
+            self.llm_config.base_url_input.setText(llm_copy.get_base_url())
+            self.llm_config.model_input.setText(llm_copy.get_model())
 
     def _on_document_selected(self, document_id: str):
         self.statusbar.showMessage(f"Loading document {document_id}...")
