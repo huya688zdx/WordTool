@@ -101,42 +101,67 @@ class TextAnchorMapper:
     ) -> List[CoordinateMapping]:
         """Strategy 0: Map paragraphs to PDF blocks by sequential position.
 
-        Includes both text blocks (type=0) and image blocks (type=1).
-        When text extraction is garbled (e.g., CJK with non-Unicode fonts),
-        we match paragraphs to blocks based on their order on the page.
+        Uses a gap-based clustering: computes vertical gaps between consecutive
+        blocks on each page. The largest gaps are treated as paragraph boundaries.
+        This groups nearby lines (same paragraph) together while splitting at
+        real paragraph breaks.
         """
-        mappings = []
-        all_blocks = []  # (page_num, bbox, block_type)
+        # 1. Collect all text/image blocks, grouped by page, sorted by y
+        pages_blocks = {}  # page_num -> [(y0, x0, x1, y1, block_type)]
 
         for page_index in range(len(doc)):
             page = doc[page_index]
             text_dict = page.get_text("dict")
+            page_list = []
             for block in text_dict.get("blocks", []):
                 bbox = block.get("bbox", (0, 0, 0, 0))
                 block_type = block.get("type", 0)
-                if block_type == 0:  # text block
-                    if bbox[2] - bbox[0] > 10 and bbox[3] - bbox[1] > 5:
-                        all_blocks.append((page_index + 1, tuple(bbox), "text"))
-                elif block_type == 1:  # image block
-                    if bbox[2] - bbox[0] > 10 and bbox[3] - bbox[1] > 10:
-                        all_blocks.append((page_index + 1, tuple(bbox), "image"))
+                w = bbox[2] - bbox[0]
+                h = bbox[3] - bbox[1]
+                if w > 20 and h > 6:
+                    page_list.append((
+                        bbox[0], bbox[1], bbox[2], bbox[3],
+                        "image" if block_type == 1 else "text"
+                    ))
+            page_list.sort(key=lambda b: (b[1], b[0]))  # sort by y then x
+            pages_blocks[page_index + 1] = page_list
 
-        # Filter out tiny blocks (likely noise)
-        valid_blocks = [b for b in all_blocks
-                        if (b[1][2] - b[1][0]) > 20 and (b[1][3] - b[1][1]) > 8]
+        # 2. Expand each block's bbox downward to capture nearby lines
+        # Same paragraph lines have very small gaps (< 5pt) in dense CJK docs
+        for page_num in pages_blocks:
+            blocks = pages_blocks[page_num]
+            for i in range(len(blocks)):
+                # Look ahead for blocks very close below
+                for j in range(i + 1, len(blocks)):
+                    gap = blocks[j][1] - blocks[i][3]
+                    if gap < 5:  # nearly touching = same paragraph
+                        # Expand current bbox
+                        blocks[i] = (
+                            min(blocks[i][0], blocks[j][0]),
+                            blocks[i][1],
+                            max(blocks[i][2], blocks[j][2]),
+                            blocks[j][3],
+                            blocks[i][4],
+                        )
+                    else:
+                        break
 
-        # Map paragraphs to blocks sequentially
+        # Flatten to single list, keeping page order
+        all_blocks = []
+        for page_num in sorted(pages_blocks.keys()):
+            for b in pages_blocks[page_num]:
+                all_blocks.append((page_num, b[0], b[1], b[2], b[3], b[4]))
+
         valid_paras = [p for p in paragraphs if p.full_text.strip() or p.is_image]
+        mappings = []
         for i, para in enumerate(valid_paras):
-            if i < len(valid_blocks):
-                page_num, bbox, block_type = valid_blocks[i]
-                strategy = "position_based"
-                if block_type == "image":
-                    strategy = "image_block"
+            if i < len(all_blocks):
+                page_num, x0, y0, x1, y1, btype = all_blocks[i]
+                strategy = "image_block" if btype == "image" else "position_based"
                 mappings.append(CoordinateMapping(
                     paragraph_id=para.para_index,
                     page_number=page_num,
-                    bbox=bbox,
+                    bbox=(x0, y0, x1, y1),
                     confidence=0.5,
                     strategy=strategy,
                 ))
