@@ -7,37 +7,42 @@ from PySide6.QtGui import QColor, QBrush
 
 from app.models.base import get_session_factory
 from app.models.paragraph import Paragraph
+from app.gui.i18n import I18n
 
 
 class ParagraphView(QGroupBox):
-    paragraph_selected = Signal(str, str)  # paragraph_id, document_id
+    paragraph_selected = Signal(str, str)
 
     def __init__(self):
-        super().__init__("段落列表")
+        super().__init__("")
         self._document_id = None
         self._setup_ui()
 
     def _setup_ui(self):
         layout = QVBoxLayout(self)
-
         self.table = QTableWidget()
         self.table.setColumnCount(5)
-        self.table.setHorizontalHeaderLabels([
-            "#", "内容", "样式", "高亮", "修订"
-        ])
-        self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setSelectionMode(QTableWidget.SingleSelection)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.table.cellClicked.connect(self._on_cell_clicked)
-
         layout.addWidget(self.table)
+
+    def refresh_text(self):
+        self.setTitle(I18n.tr("para.title"))
+        self.table.setHorizontalHeaderLabels([
+            I18n.tr("para.col_index"),
+            I18n.tr("para.col_content"),
+            I18n.tr("para.col_style"),
+            I18n.tr("para.col_highlight"),
+            I18n.tr("para.col_revision"),
+        ])
 
     def load_paragraphs(self, document_id: str):
         self._document_id = document_id
         self.table.setRowCount(0)
-
         db = get_session_factory()()
         try:
             paragraphs = db.query(Paragraph).filter(
@@ -45,33 +50,24 @@ class ParagraphView(QGroupBox):
             ).order_by(Paragraph.para_index).all()
 
             self.table.setRowCount(len(paragraphs))
-
             for row, para in enumerate(paragraphs):
-                # Index
                 self.table.setItem(row, 0, QTableWidgetItem(str(para.para_index)))
 
-                # Text
                 text_item = QTableWidgetItem(para.full_text[:100])
                 text_item.setData(Qt.UserRole, para.id)
                 self.table.setItem(row, 1, text_item)
 
-                # Style
-                self.table.setItem(row, 2, QTableWidgetItem(
-                    para.style_name or "-"
-                ))
+                self.table.setItem(row, 2, QTableWidgetItem(para.style_name or "-"))
 
-                # Highlight / Image marker
                 if para.is_image:
-                    hl_item = QTableWidgetItem("[图片]")
+                    hl_item = QTableWidgetItem(I18n.tr("para.image_marker"))
                 else:
                     hl_item = QTableWidgetItem("⚡" if para.has_highlights else "-")
                 self.table.setItem(row, 3, hl_item)
 
-                # Revision marker
                 rev_item = QTableWidgetItem("✏" if para.has_revisions else "-")
                 self.table.setItem(row, 4, rev_item)
 
-                # Color rows with highlights or images
                 if para.has_highlights:
                     yellow = QColor(255, 255, 200)
                     for col in range(5):
@@ -80,7 +76,6 @@ class ParagraphView(QGroupBox):
                     blue = QColor(200, 220, 255)
                     for col in range(5):
                         self.table.item(row, col).setBackground(QBrush(blue))
-
         finally:
             db.close()
 

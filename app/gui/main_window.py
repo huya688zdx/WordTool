@@ -1,10 +1,12 @@
 from PySide6.QtWidgets import (
     QMainWindow, QSplitter, QWidget, QVBoxLayout, QHBoxLayout,
     QTabWidget, QLabel, QStatusBar, QMessageBox, QMenuBar,
-    QGroupBox, QScrollArea, QDockWidget,
+    QGroupBox, QScrollArea, QDockWidget, QDialog, QDialogButtonBox,
 )
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QAction, QActionGroup
 
+from app.gui.i18n import I18n
 from app.gui.document_panel import DocumentPanel
 from app.gui.codebase_panel import CodebasePanel
 from app.gui.pipeline_panel import PipelinePanel
@@ -17,22 +19,12 @@ from app.gui.ai_analysis import AIAnalysisWidget
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("WordAgent - AI 需求变更追踪系统")
-        self.resize(1400, 900)
-
-        self._setup_menu()
+        I18n.instance()
         self._setup_ui()
+        self._setup_menu()
         self._setup_statusbar()
         self._connect_signals()
-
-    def _setup_menu(self):
-        menubar = self.menuBar()
-
-        file_menu = menubar.addMenu("文件(&F)")
-        file_menu.addAction("退出(&Q)", self.close)
-
-        help_menu = menubar.addMenu("帮助(&H)")
-        help_menu.addAction("关于(&A)", self._show_about)
+        self._refresh_ui_text()
 
     def _setup_ui(self):
         central = QWidget()
@@ -44,98 +36,144 @@ class MainWindow(QMainWindow):
         left_layout = QVBoxLayout(left_widget)
         left_layout.setContentsMargins(4, 4, 4, 4)
 
-        # Document panel
         self.document_panel = DocumentPanel()
         left_layout.addWidget(self.document_panel)
 
-        # Codebase panel
         self.codebase_panel = CodebasePanel()
         left_layout.addWidget(self.codebase_panel)
 
-        # Pipeline panel
         self.pipeline_panel = PipelinePanel()
         left_layout.addWidget(self.pipeline_panel)
-
         left_layout.addStretch()
 
         # === Right panel ===
         right_splitter = QSplitter(Qt.Vertical)
-
-        # Paragraph view (top)
         self.paragraph_view = ParagraphView()
         right_splitter.addWidget(self.paragraph_view)
-
-        # Coordinate view (bottom)
         self.coordinate_view = CoordinateView()
         right_splitter.addWidget(self.coordinate_view)
-
         right_splitter.setSizes([400, 400])
 
         main_splitter.addWidget(left_widget)
         main_splitter.addWidget(right_splitter)
         main_splitter.setSizes([350, 1000])
 
-        # Main layout
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(main_splitter)
 
-        # === Bottom dock: LLM + AI ===
-        bottom_widget = QWidget()
-        bottom_layout = QVBoxLayout(bottom_widget)
-        bottom_layout.setContentsMargins(4, 4, 4, 4)
-
+        # === LLM Config (shown in left panel, not dock) ===
         self.llm_config = LLMConfigWidget()
-        bottom_layout.addWidget(self.llm_config)
+        left_layout.addWidget(self.llm_config)
 
+        # === Bottom dock: AI Analysis ===
         self.ai_analysis = AIAnalysisWidget()
-        bottom_layout.addWidget(self.ai_analysis)
-
-        bottom_dock = QDockWidget("AI 分析")
-        bottom_dock.setWidget(bottom_widget)
-        bottom_dock.setFeatures(QDockWidget.DockWidgetMovable)
+        bottom_dock = QDockWidget()
+        bottom_dock.setWidget(self.ai_analysis)
+        bottom_dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetClosable)
         self.addDockWidget(Qt.BottomDockWidgetArea, bottom_dock)
+
+    def _setup_menu(self):
+        menubar = self.menuBar()
+
+        # File menu
+        self.file_menu = menubar.addMenu("")
+        self.exit_action = self.file_menu.addAction("", self.close)
+
+        # Language menu
+        self.lang_menu = menubar.addMenu("")
+        self.lang_group = QActionGroup(self)
+        self.lang_group.setExclusive(True)
+
+        for code, name in I18n.languages():
+            action = self.lang_menu.addAction(name)
+            action.setCheckable(True)
+            action.setData(code)
+            action.triggered.connect(lambda checked, c=code: self._switch_language(c))
+            self.lang_group.addAction(action)
+            if code == I18n.current_lang():
+                action.setChecked(True)
+
+        # Settings menu
+        self.settings_menu = menubar.addMenu("")
+        self.llm_settings_action = self.settings_menu.addAction("", self._show_llm_settings)
+
+        # Help menu
+        self.help_menu = menubar.addMenu("")
+        self.about_action = self.help_menu.addAction("", self._show_about)
 
     def _setup_statusbar(self):
         self.statusbar = QStatusBar()
         self.setStatusBar(self.statusbar)
-        self.statusbar.showMessage("就绪")
 
     def _connect_signals(self):
-        # Document selected → load paragraphs
-        self.document_panel.document_selected.connect(
-            self._on_document_selected
-        )
-        # Pipeline progress
-        self.pipeline_panel.status_changed.connect(
-            self.statusbar.showMessage
-        )
-        # Paragraph selected → show coordinates + screenshot
-        self.paragraph_view.paragraph_selected.connect(
-            self._on_paragraph_selected
-        )
-        # AI analysis needs document context
-        self.ai_analysis.analysis_requested.connect(
-            self._on_analysis_requested
-        )
+        self.document_panel.document_selected.connect(self._on_document_selected)
+        self.pipeline_panel.status_changed.connect(self.statusbar.showMessage)
+        self.paragraph_view.paragraph_selected.connect(self._on_paragraph_selected)
+        self.ai_analysis.analysis_requested.connect(self._on_analysis_requested)
+        I18n.instance().language_changed.connect(lambda _: self._refresh_ui_text())
+
+    def _refresh_ui_text(self):
+        self.setWindowTitle(I18n.tr("app.title"))
+        self.file_menu.setTitle(I18n.tr("menu.file"))
+        self.exit_action.setText(I18n.tr("menu.file.exit"))
+        self.lang_menu.setTitle(I18n.tr("menu.language"))
+        self.settings_menu.setTitle(I18n.tr("menu.settings"))
+        self.llm_settings_action.setText(I18n.tr("menu.settings.llm"))
+        self.help_menu.setTitle(I18n.tr("menu.help"))
+        self.about_action.setText(I18n.tr("menu.help.about"))
+        self.statusbar.showMessage(I18n.tr("statusbar.ready"))
+        self.document_panel.refresh_text()
+        self.codebase_panel.refresh_text()
+        self.pipeline_panel.refresh_text()
+        self.paragraph_view.refresh_text()
+        self.coordinate_view.refresh_text()
+        self.llm_config.refresh_text()
+        self.ai_analysis.refresh_text()
+        bottom = self.findChild(QDockWidget)
+        if bottom:
+            bottom.setWindowTitle(I18n.tr("ai.title"))
+
+    def _switch_language(self, lang: str):
+        I18n.set_language(lang)
+
+    def _show_llm_settings(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle(I18n.tr("settings.title"))
+        layout = QVBoxLayout(dialog)
+
+        llm_widget = LLMConfigWidget()
+        layout.addWidget(llm_widget)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(dialog.accept)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        # Sync with current config
+        llm_widget.api_key_input.setText(self.llm_config.get_api_key())
+        llm_widget.base_url_input.setText(self.llm_config.get_base_url())
+        llm_widget.model_input.setText(self.llm_config.get_model())
+
+        if dialog.exec() == QDialog.Accepted:
+            self.llm_config.api_key_input.setText(llm_widget.get_api_key())
+            self.llm_config.base_url_input.setText(llm_widget.get_base_url())
+            self.llm_config.model_input.setText(llm_widget.get_model())
 
     def _on_document_selected(self, document_id: str):
-        """Load paragraphs and coordinates for selected document."""
-        self.statusbar.showMessage(f"加载文档 {document_id}...")
+        self.statusbar.showMessage(f"Loading document {document_id}...")
         self.paragraph_view.load_paragraphs(document_id)
 
     def _on_paragraph_selected(self, paragraph_id: str, document_id: str):
-        """Show coordinates and screenshot for selected paragraph."""
         self.coordinate_view.load_coordinates(paragraph_id, document_id)
 
     def _on_analysis_requested(self, paragraph_text: str):
-        """Run AI analysis on selected paragraph."""
         api_key = self.llm_config.get_api_key()
         base_url = self.llm_config.get_base_url()
         model = self.llm_config.get_model()
 
         if not api_key:
-            QMessageBox.warning(self, "配置缺失", "请先配置大模型 API Key")
+            QMessageBox.warning(self, "", I18n.tr("ai.need_config"))
             return
 
         code_context = ""
@@ -143,18 +181,9 @@ class MainWindow(QMainWindow):
             code_context = self.codebase_panel.get_selected_code()
 
         self.ai_analysis.run_analysis(
-            api_key=api_key,
-            base_url=base_url,
-            model=model,
-            paragraph_text=paragraph_text,
-            code_context=code_context,
+            api_key=api_key, base_url=base_url, model=model,
+            paragraph_text=paragraph_text, code_context=code_context,
         )
 
     def _show_about(self):
-        QMessageBox.about(
-            self,
-            "关于 WordAgent",
-            "WordAgent - AI 需求变更追踪系统\n\n"
-            "自动解析 Word 设计书 → 识别修改点 → 定位影响代码\n\n"
-            "Version 0.1.0"
-        )
+        QMessageBox.about(self, I18n.tr("about.title"), I18n.tr("about.text"))
