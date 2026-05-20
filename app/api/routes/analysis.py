@@ -57,6 +57,7 @@ def parse_document(
                 has_highlights=para_data.has_highlights,
                 has_revisions=para_data.has_revisions,
                 is_deleted=para_data.is_deleted,
+                is_image=para_data.is_image,
             )
             db.add(paragraph)
             db.flush()

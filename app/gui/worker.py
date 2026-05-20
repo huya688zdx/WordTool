@@ -78,6 +78,7 @@ class PipelineWorker(QThread):
                 has_highlights=para_data.has_highlights,
                 has_revisions=para_data.has_revisions,
                 is_deleted=para_data.is_deleted,
+                is_image=para_data.is_image,
             )
             db.add(paragraph)
             db.flush()
@@ -138,6 +139,7 @@ class PipelineWorker(QThread):
                 has_highlights=p.has_highlights,
                 has_revisions=p.has_revisions,
                 is_deleted=p.is_deleted,
+                is_image=p.is_image,
             )
             para_data_list.append(pd)
 

@@ -34,6 +34,8 @@ class ParagraphData:
     has_highlights: bool = False
     has_revisions: bool = False
     is_deleted: bool = False
+    is_image: bool = False
+    image_count: int = 0
     xml_raw: Optional[str] = None
 
 
@@ -75,9 +77,14 @@ class DocxParser:
                     paragraphs.append(para_data)
                     para_index += 1
             elif element.tag == qn("w:tbl"):
-                # Extract paragraphs from table cells
                 for cell_para in self._extract_table_paragraphs(element, para_index):
                     paragraphs.append(cell_para)
+                    para_index += 1
+            # Detect standalone images between paragraphs
+            elif element.tag in (qn("w:drawing"), qn("w:pict")):
+                para_data = self._parse_image_element(element, para_index)
+                if para_data:
+                    paragraphs.append(para_data)
                     para_index += 1
 
         return paragraphs
@@ -171,9 +178,16 @@ class DocxParser:
                             has_highlights = True
                         run_index += 1
 
+            elif child.tag in (qn("w:drawing"), qn("w:pict")):
+                # Inline image within a paragraph
+                inline_count = len(child.findall(".//" + qn("wp:inline")))
+                if inline_count == 0:
+                    inline_count = 1
+                full_text_parts.append(f"[图片 x{inline_count}]")
+
         full_text = "".join(full_text_parts)
 
-        # Skip empty paragraphs
+        # Don't skip paragraphs that contain images
         if not full_text.strip() and not runs:
             return None
 
@@ -187,6 +201,25 @@ class DocxParser:
             has_revisions=has_revisions,
             is_deleted=is_deleted,
             xml_raw=etree.tostring(para_element, encoding="unicode"),
+        )
+
+    def _parse_image_element(
+        self, element: etree._Element, para_index: int
+    ) -> Optional[ParagraphData]:
+        """Parse a standalone image element (w:drawing or w:pict)."""
+        image_count = len(element.findall(".//" + qn("wp:inline"))) + \
+                      len(element.findall(".//" + qn("wp:anchor")))
+        if image_count == 0:
+            image_count = len(element.findall(".//" + qn("w:drawing")))
+        if image_count == 0:
+            image_count = 1  # Assume at least one image
+
+        return ParagraphData(
+            para_index=para_index,
+            full_text=f"[图片 x{image_count}]",
+            is_image=True,
+            image_count=image_count,
+            xml_raw=etree.tostring(element, encoding="unicode"),
         )
 
     def _parse_run(

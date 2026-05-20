@@ -99,38 +99,46 @@ class TextAnchorMapper:
         paragraphs: List[ParagraphData],
         doc: fitz.Document,
     ) -> List[CoordinateMapping]:
-        """Strategy 0: Map paragraphs to PDF text blocks by sequential position.
+        """Strategy 0: Map paragraphs to PDF blocks by sequential position.
 
+        Includes both text blocks (type=0) and image blocks (type=1).
         When text extraction is garbled (e.g., CJK with non-Unicode fonts),
-        we match paragraphs to text blocks based on their order on the page.
+        we match paragraphs to blocks based on their order on the page.
         """
         mappings = []
-        all_blocks = []  # (page_num, bbox)
+        all_blocks = []  # (page_num, bbox, block_type)
 
         for page_index in range(len(doc)):
             page = doc[page_index]
             text_dict = page.get_text("dict")
             for block in text_dict.get("blocks", []):
-                if block.get("type") == 0:  # text block
-                    bbox = block.get("bbox", (0, 0, 0, 0))
+                bbox = block.get("bbox", (0, 0, 0, 0))
+                block_type = block.get("type", 0)
+                if block_type == 0:  # text block
                     if bbox[2] - bbox[0] > 10 and bbox[3] - bbox[1] > 5:
-                        all_blocks.append((page_index + 1, tuple(bbox)))
+                        all_blocks.append((page_index + 1, tuple(bbox), "text"))
+                elif block_type == 1:  # image block
+                    if bbox[2] - bbox[0] > 10 and bbox[3] - bbox[1] > 10:
+                        all_blocks.append((page_index + 1, tuple(bbox), "image"))
 
         # Filter out tiny blocks (likely noise)
-        text_blocks = [b for b in all_blocks
-                       if (b[1][2] - b[1][0]) > 20 and (b[1][3] - b[1][1]) > 8]
+        valid_blocks = [b for b in all_blocks
+                        if (b[1][2] - b[1][0]) > 20 and (b[1][3] - b[1][1]) > 8]
 
         # Map paragraphs to blocks sequentially
-        valid_paras = [p for p in paragraphs if p.full_text.strip()]
+        valid_paras = [p for p in paragraphs if p.full_text.strip() or p.is_image]
         for i, para in enumerate(valid_paras):
-            if i < len(text_blocks):
-                page_num, bbox = text_blocks[i]
+            if i < len(valid_blocks):
+                page_num, bbox, block_type = valid_blocks[i]
+                strategy = "position_based"
+                if block_type == "image":
+                    strategy = "image_block"
                 mappings.append(CoordinateMapping(
                     paragraph_id=para.para_index,
                     page_number=page_num,
                     bbox=bbox,
-                    confidence=0.5,  # Lower confidence for position-based
-                    strategy="position_based",
+                    confidence=0.5,
+                    strategy=strategy,
                 ))
 
         return mappings

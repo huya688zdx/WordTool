@@ -20,6 +20,7 @@ class Paragraph(Base, TimestampMixin):
     has_highlights: Mapped[bool] = mapped_column(Boolean, default=False)
     has_revisions: Mapped[bool] = mapped_column(Boolean, default=False)
     is_deleted: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_image: Mapped[bool] = mapped_column(Boolean, default=False)
 
     document = relationship("Document", back_populates="paragraphs")
     runs = relationship("Run", back_populates="paragraph", order_by="Run.run_index")

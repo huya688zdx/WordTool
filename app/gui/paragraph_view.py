@@ -60,19 +60,26 @@ class ParagraphView(QGroupBox):
                     para.style_name or "-"
                 ))
 
-                # Highlight marker
-                hl_item = QTableWidgetItem("⚡" if para.has_highlights else "-")
+                # Highlight / Image marker
+                if para.is_image:
+                    hl_item = QTableWidgetItem("[图片]")
+                else:
+                    hl_item = QTableWidgetItem("⚡" if para.has_highlights else "-")
                 self.table.setItem(row, 3, hl_item)
 
                 # Revision marker
                 rev_item = QTableWidgetItem("✏" if para.has_revisions else "-")
                 self.table.setItem(row, 4, rev_item)
 
-                # Color rows with highlights
+                # Color rows with highlights or images
                 if para.has_highlights:
                     yellow = QColor(255, 255, 200)
                     for col in range(5):
                         self.table.item(row, col).setBackground(QBrush(yellow))
+                elif para.is_image:
+                    blue = QColor(200, 220, 255)
+                    for col in range(5):
+                        self.table.item(row, col).setBackground(QBrush(blue))
 
         finally:
             db.close()
