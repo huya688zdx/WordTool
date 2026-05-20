@@ -10,6 +10,10 @@ import os
 # Ensure project root is on path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+# Fix console encoding for CJK systems (Japanese/Chinese Windows)
+from app.utils.text_normalize import fix_console_encoding
+fix_console_encoding()
+
 # Fix Qt platform plugin discovery on Windows
 import PySide6
 pyside6_dir = os.path.dirname(PySide6.__file__)
