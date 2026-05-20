@@ -79,6 +79,20 @@ wordagent/
 │   │   └── page_model.py          # 数据结构
 │   ├── models/                    # SQLAlchemy 模型
 │   ├── schemas/                   # Pydantic Schema
+│   ├── gui/                      # PySide6 GUI
+│   │   ├── main_window.py
+│   │   ├── document_panel.py
+│   │   ├── codebase_panel.py
+│   │   ├── pipeline_panel.py
+│   │   ├── paragraph_view.py
+│   │   ├── coordinate_view.py
+│   │   ├── llm_config.py
+│   │   ├── ai_analysis.py
+│   │   └── worker.py
+│   ├── ai/                        # LLM 模块
+│   │   ├── client.py
+│   │   ├── requirement_analyzer.py
+│   │   └── prompt_templates.py
 │   ├── storage/
 │   │   └── local_fs.py            # 本地文件存储
 │   └── utils/
@@ -133,14 +147,36 @@ curl -X POST http://127.0.0.1:8000/documents/upload \
 # 2. 运行完整流程（解析 → 渲染 → 对齐）
 curl -X POST http://127.0.0.1:8000/documents/{document_id}/full-pipeline
 
-# 返回: {"status": "aligned", "parse": {...}, "render": {...}, "align": {...}}
-
 # 3. 查询段落
 curl http://127.0.0.1:8000/documents/{document_id}/paragraphs
 
 # 4. 查询坐标映射
 curl http://127.0.0.1:8000/documents/{document_id}/coordinates
 ```
+
+### 启动 GUI（桌面应用）
+
+```bash
+# 安装 PySide6 和 openai
+pip install pyside6 openai
+
+# 启动 GUI
+python run_gui.py
+```
+
+**GUI 功能：**
+
+| 模块 | 功能 |
+|------|------|
+| 文档管理 | 上传 DOCX/PDF，双击文档加载段落 |
+| 代码仓库 | 选择项目目录，浏览和预览代码文件 |
+| 流程控制 | 一键执行 解析→渲染→对齐 |
+| 段落列表 | 显示段落内容、样式、高亮/修订标记 |
+| 坐标视图 | 显示 PDF 坐标 + 截图预览 |
+| 大模型配置 | 支持 GPT-4/DeepSeek/Gemini/自定义 provider |
+| AI 分析 | 需求变更分析（可选代码上下文） |
+
+
 
 ### 测试脚本
 

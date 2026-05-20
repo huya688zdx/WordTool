@@ -6,7 +6,7 @@ build-backend = "setuptools.backends._legacy:_Backend"
 name = "wordagent"
 version = "0.1.0"
 description = "AI Requirement Traceability System"
-requires-python = ">=3.11"
+requires-python = ">=3.8"
 dependencies = [
     "python-docx>=1.1.0",
     "lxml>=5.0.0",
@@ -19,6 +19,8 @@ dependencies = [
     "pydantic>=2.9.0",
     "pydantic-settings>=2.6.0",
     "python-multipart>=0.0.12",
+    "pyside6>=6.6.0",
+    "openai>=1.40.0",
 ]
 
 [project.optional-dependencies]
