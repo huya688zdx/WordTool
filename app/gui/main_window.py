@@ -84,12 +84,13 @@ class MainWindow(QMainWindow):
         self.lang_menu = menubar.addMenu("")
         self.lang_group = QActionGroup(self)
         self.lang_group.setExclusive(True)
+        self.lang_group.triggered.connect(self._on_language_changed)
 
         for code, name in I18n.languages():
-            action = self.lang_menu.addAction(name)
+            action = QAction(name, self)
             action.setCheckable(True)
             action.setData(code)
-            action.triggered.connect(lambda checked, c=code: self._switch_language(c))
+            self.lang_menu.addAction(action)
             self.lang_group.addAction(action)
             if code == I18n.current_lang():
                 action.setChecked(True)
@@ -134,8 +135,10 @@ class MainWindow(QMainWindow):
         if bottom:
             bottom.setWindowTitle(I18n.tr("ai.title"))
 
-    def _switch_language(self, lang: str):
-        I18n.set_language(lang)
+    def _on_language_changed(self, action: QAction):
+        lang = action.data()
+        if lang:
+            I18n.set_language(lang)
 
     def _show_llm_settings(self):
         dialog = QDialog(self)
