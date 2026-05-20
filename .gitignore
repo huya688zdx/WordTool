@@ -1,0 +1,38 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Data
+data/
+*.db
+*.db-journal
+*.db-wal
+
+# Environment
+.env
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Claude
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
