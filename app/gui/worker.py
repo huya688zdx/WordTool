@@ -188,28 +188,38 @@ class PipelineWorker(QThread):
 
     def _ai_heading_check(self, doc, db):
         """Run AI heading detection to find missed headings."""
+        llm_cfg = {}
         try:
             from app.gui.llm_config import _load_config
             llm_cfg = _load_config()
-            if not llm_cfg.get("ai_heading_enabled", False):
-                return
-            if not (llm_cfg.get("api_key") and llm_cfg.get("base_url") and llm_cfg.get("model")):
-                return
-        except Exception:
+        except Exception as e:
+            print(f"[AI标题] 读取配置失败: {e}")
+            return
+
+        if not llm_cfg:
+            print("[AI标题] 未找到 LLM 配置（请先在 Settings 中保存 API Key）")
+            return
+        if not llm_cfg.get("ai_heading_enabled", False):
+            print("[AI标题] 未启用（Settings → 勾选 'AI标题层级检测'）")
+            return
+        if not llm_cfg.get("api_key"):
+            print("[AI标题] 未配置 API Key")
+            return
+        if not llm_cfg.get("base_url"):
+            print("[AI标题] 未配置 Base URL")
             return
 
         paragraphs = db.query(Paragraph).filter(
             Paragraph.document_id == doc.id
         ).order_by(Paragraph.para_index).all()
 
-        # Build paragraph list for AI
         para_list = [
             {"index": p.para_index, "heading_level": p.heading_level, "text": p.full_text}
             for p in paragraphs
         ]
 
         self.progress.emit("AI 检查标题层级...")
-        print("[AI标题] 发送 %d 个段落分析层级结构..." % len(para_list))
+        print(f"[AI标题] 发送 {len(para_list)} 个段落分析层级结构...")
         try:
             from app.ai.heading_detector import detect_headings
             corrections = detect_headings(
@@ -223,11 +233,12 @@ class PipelineWorker(QThread):
                     level = c.get("heading_level", 1)
                     reason = c.get("reason", "")
                     print(f"  段落[{idx}] → Heading {level}: {reason}")
-                    # Update in DB
                     p = next((x for x in paragraphs if x.para_index == idx), None)
                     if p:
                         p.heading_level = level
                 db.flush()
+            else:
+                print("[AI标题] AI 认为层级无需修正")
         except Exception as e:
             print(f"[AI标题] 检测失败: {e}")
 
