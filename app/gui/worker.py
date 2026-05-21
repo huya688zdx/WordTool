@@ -47,6 +47,8 @@ class PipelineWorker(QThread):
                     self.progress.emit("解析 DOCX 结构...")
                     self._parse_docx(doc, db)
 
+                self._ai_heading_check(doc, db)
+
                 self.progress.emit("渲染 PDF（调用 Word）...")
                 self._render(doc, db)
 
@@ -183,6 +185,51 @@ class PipelineWorker(QThread):
 
         doc.status = "parsed"
         db.flush()
+
+    def _ai_heading_check(self, doc, db):
+        """Run AI heading detection to find missed headings."""
+        try:
+            from app.gui.llm_config import _load_config
+            llm_cfg = _load_config()
+            if not llm_cfg.get("ai_heading_enabled", False):
+                return
+            if not (llm_cfg.get("api_key") and llm_cfg.get("base_url") and llm_cfg.get("model")):
+                return
+        except Exception:
+            return
+
+        paragraphs = db.query(Paragraph).filter(
+            Paragraph.document_id == doc.id
+        ).order_by(Paragraph.para_index).all()
+
+        # Build paragraph list for AI
+        para_list = [
+            {"index": p.para_index, "heading_level": p.heading_level, "text": p.full_text}
+            for p in paragraphs
+        ]
+
+        self.progress.emit("AI 检查标题层级...")
+        print("[AI标题] 发送 %d 个段落分析层级结构..." % len(para_list))
+        try:
+            from app.ai.heading_detector import detect_headings
+            corrections = detect_headings(
+                llm_cfg["api_key"], llm_cfg["base_url"], llm_cfg["model"],
+                para_list,
+            )
+            if corrections:
+                print(f"[AI标题] 发现 {len(corrections)} 个层级修正:")
+                for c in corrections:
+                    idx = c.get("index", 0)
+                    level = c.get("heading_level", 1)
+                    reason = c.get("reason", "")
+                    print(f"  段落[{idx}] → Heading {level}: {reason}")
+                    # Update in DB
+                    p = next((x for x in paragraphs if x.para_index == idx), None)
+                    if p:
+                        p.heading_level = level
+                db.flush()
+        except Exception as e:
+            print(f"[AI标题] 检测失败: {e}")
 
     def _render(self, doc, db):
         doc.status = "rendering"

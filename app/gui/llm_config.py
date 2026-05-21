@@ -80,6 +80,8 @@ class LLMConfigWidget(QGroupBox):
         ai_row = QHBoxLayout()
         self.ai_visual_check = QCheckBox(I18n.tr("llm.ai_visual"))
         ai_row.addWidget(self.ai_visual_check)
+        self.ai_heading_check = QCheckBox(I18n.tr("llm.ai_heading"))
+        ai_row.addWidget(self.ai_heading_check)
         ai_row.addStretch()
         main_layout.addLayout(ai_row)
 
@@ -104,6 +106,7 @@ class LLMConfigWidget(QGroupBox):
         self.api_key_input.setPlaceholderText(I18n.tr("llm.api_key_placeholder"))
         self.test_btn.setText(I18n.tr("llm.test"))
         self.ai_visual_check.setText(I18n.tr("llm.ai_visual"))
+        self.ai_heading_check.setText(I18n.tr("llm.ai_heading"))
         self.doc_pw_label.setText(I18n.tr("llm.doc_default_password"))
         self.doc_password_input.setPlaceholderText(I18n.tr("llm.doc_password_hint"))
 
@@ -139,6 +142,7 @@ class LLMConfigWidget(QGroupBox):
         if data.get("model"):
             self.model_input.setText(data["model"])
         self.ai_visual_check.setChecked(data.get("ai_visual_enabled", False))
+        self.ai_heading_check.setChecked(data.get("ai_heading_enabled", False))
         if data.get("doc_default_password"):
             self.doc_password_input.setText(data["doc_default_password"])
 
@@ -149,6 +153,7 @@ class LLMConfigWidget(QGroupBox):
             "base_url": self.get_base_url(),
             "model": self.get_model(),
             "ai_visual_enabled": self.is_ai_visual_enabled(),
+            "ai_heading_enabled": self.is_ai_heading_enabled(),
             "doc_default_password": self.get_doc_default_password(),
         })
 
@@ -157,6 +162,9 @@ class LLMConfigWidget(QGroupBox):
 
     def is_ai_visual_enabled(self) -> bool:
         return self.ai_visual_check.isChecked()
+
+    def is_ai_heading_enabled(self) -> bool:
+        return self.ai_heading_check.isChecked()
 
     def get_api_key(self) -> str:
         return self.api_key_input.text().strip()
