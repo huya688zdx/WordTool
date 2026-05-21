@@ -105,6 +105,14 @@ class WordRenderer:
         because they come from the same layout engine.
         """
         positions = []
+        # Accept all tracked changes temporarily so paragraph count and
+        # positions match the PDF (rendered in Final mode). We close
+        # without saving so the original file is not modified.
+        try:
+            doc.Revisions.AcceptAll()
+        except Exception:
+            pass
+
         page_setup = doc.PageSetup
         page_w = page_setup.PageWidth
         left_margin = page_setup.LeftMargin

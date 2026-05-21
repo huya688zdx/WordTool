@@ -45,6 +45,12 @@ def parse_doc_via_com(file_path: Path, password: str | None = None) -> list[Para
         else:
             doc = word.Documents.Open(file_str)
 
+        # Accept all tracked changes so paragraph count matches PDF Final mode
+        try:
+            doc.Revisions.AcceptAll()
+        except Exception:
+            pass
+
         total = doc.Paragraphs.Count
         for i in range(1, total + 1):
             para = doc.Paragraphs(i)

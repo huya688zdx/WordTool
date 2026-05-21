@@ -97,7 +97,13 @@ class DocxParser:
         return DocumentStructure(paragraphs=paragraphs, metadata=metadata)
 
     def _extract_paragraphs(self, doc: Document) -> List[ParagraphData]:
-        """Walk the document body and extract all paragraphs."""
+        """Walk the document body and extract only the final version paragraphs.
+
+        Tracked changes (w:ins and w:del at body level) are handled:
+        - w:ins: inserted paragraphs included as normal content
+        - w:del: deleted paragraphs skipped entirely
+        This ensures paragraph count matches the PDF (rendered in Final mode).
+        """
         paragraphs = []
         para_index = 0
 
@@ -112,12 +118,21 @@ class DocxParser:
                 for cell_para in self._extract_table_paragraphs(element, para_index):
                     paragraphs.append(cell_para)
                     para_index += 1
-            # Detect standalone images between paragraphs
             elif element.tag in (qn("w:drawing"), qn("w:pict")):
                 para_data = self._parse_image_element(element, para_index)
                 if para_data:
                     paragraphs.append(para_data)
                     para_index += 1
+            elif element.tag == qn("w:ins"):
+                # Inserted paragraphs (tracked changes) — include as normal
+                for p in element.findall(qn("w:p")):
+                    para_data = self._parse_paragraph(p, para_index)
+                    if para_data:
+                        paragraphs.append(para_data)
+                        para_index += 1
+            elif element.tag == qn("w:del"):
+                # Deleted paragraphs (tracked changes) — skip entirely
+                pass
 
         return paragraphs
 
