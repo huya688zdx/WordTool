@@ -163,6 +163,7 @@ class MainWindow(QMainWindow):
             self.llm_config.api_key_input.setText(llm_copy.get_api_key())
             self.llm_config.base_url_input.setText(llm_copy.get_base_url())
             self.llm_config.model_input.setText(llm_copy.get_model())
+            self.llm_config.save()
 
     def _on_document_selected(self, document_id: str):
         self.statusbar.showMessage(f"Loading document {document_id}...")

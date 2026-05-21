@@ -1,3 +1,6 @@
+from pathlib import Path
+import json
+
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QComboBox, QLineEdit, QPushButton,
     QLabel, QGroupBox,
@@ -6,11 +9,28 @@ from PySide6.QtWidgets import (
 from app.ai.client import LLMClient
 from app.gui.i18n import I18n
 
+_config_path = Path("./data/llm_config.json")
+
+
+def _load_config() -> dict:
+    if _config_path.exists():
+        try:
+            return json.loads(_config_path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            pass
+    return {}
+
+
+def _save_config(data: dict) -> None:
+    _config_path.parent.mkdir(parents=True, exist_ok=True)
+    _config_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
 
 class LLMConfigWidget(QGroupBox):
     def __init__(self):
         super().__init__("")
         self._setup_ui()
+        self.load()
 
     def _setup_ui(self):
         layout = QHBoxLayout(self)
@@ -84,6 +104,24 @@ class LLMConfigWidget(QGroupBox):
                 self.status_label.setText(I18n.tr("llm.failed"))
         except Exception as e:
             self.status_label.setText(f"Error: {e}")
+
+    def load(self):
+        """Load saved config from disk."""
+        data = _load_config()
+        if data.get("api_key"):
+            self.api_key_input.setText(data["api_key"])
+        if data.get("base_url"):
+            self.base_url_input.setText(data["base_url"])
+        if data.get("model"):
+            self.model_input.setText(data["model"])
+
+    def save(self):
+        """Persist current config to disk."""
+        _save_config({
+            "api_key": self.get_api_key(),
+            "base_url": self.get_base_url(),
+            "model": self.get_model(),
+        })
 
     def get_api_key(self) -> str:
         return self.api_key_input.text().strip()
