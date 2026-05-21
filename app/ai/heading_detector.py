@@ -1,9 +1,4 @@
-"""AI-assisted heading level detection and correction.
-
-When documents have visually-styled headings that aren't marked with
-proper Word heading styles, this module sends the paragraph list to
-an LLM to detect and correct heading levels based on content patterns.
-"""
+"""AI-assisted heading level detection and correction."""
 
 from __future__ import annotations
 
@@ -11,74 +6,61 @@ import json
 import logging
 import re
 import time
-from pathlib import Path
 
 _log = logging.getLogger(__name__)
 
-HEADING_DETECT_PROMPT = """You are a document structure analyst. Your task is to review a list of paragraphs extracted from a document and identify paragraphs that SHOULD be headings but are currently marked as normal text.
+HEADING_DETECT_PROMPT = """You are a document structure analyst. Review paragraphs from a Chinese technical document and identify ones that SHOULD be headings but are currently marked as · (normal text, Lv=0).
 
-## How to Identify Headings
-Look for these patterns in paragraph content:
-1. **Numbering**: lines starting with "第X章", "一、", "1.", "1.1", "（一）", "①", etc.
-2. **Short & formal**: standalone short lines (<=30 chars) that summarize a topic
-3. **Structural keywords**: lines containing "概述", "总结", "目的", "范围", "背景", etc. that appear to introduce sections
-4. **Pattern consistency**: if a document uses "X.X" numbering for headings, all such lines should be headings
-5. **Context contrast**: a short line followed by multiple longer body paragraphs is likely a heading
+## Chinese Document Patterns You MUST Check
+- "第X章 ..." → heading_level 1
+- "X. ...", "X.X ...", "X.X.X ..." at line start → heading_level 1/2/3 by dot count
+- "一、", "二、", "三、" → heading_level 1
+- "（一）", "（二）" → heading_level 2
+- Any short line (≤40 chars) that names a section topic with no body text around it → heading
+- Lines like 概述, 背景, 目的, 范围, 总结, 需求分析, 系统设计, 接口定义, 数据结构, 测试方案, 部署方案
 
-## What NOT to Mark as Heading
-- Body paragraphs (>100 chars of continuous text)
-- Table of contents entries
-- Image captions
-- Page numbers or headers/footers
+## Rules
+1. Scan EVERY paragraph marked as · (Lv=0)
+2. If it matches ANY heading pattern → MUST include in corrections
+3. ERR ON MARKING — better to flag a borderline case than miss a real heading
 
-## Output Format
-Return ONLY a JSON object:
-```
-{
-  "corrections": [
-    {"index": 5, "heading_level": 1, "reason": "第2章 系统设计"},
-    {"index": 8, "heading_level": 2, "reason": "2.1 模块划分"},
-    {"index": 15, "heading_level": 2, "reason": "2.2 接口定义"}
-  ]
-}
-```
+## Output
+Return ONLY JSON: {"corrections": [{"index": 5, "heading_level": 2, "reason": "2.1 系统架构"}]}
 
-Only include paragraphs that need CORRECTION (heading_level changed from current). Use:
-- heading_level 1: major chapters (第X章, X., 一、)
-- heading_level 2: sections (X.X, (一), etc.)
-- heading_level 3: subsections (X.X.X, ①, etc.)
+heading_level meanings:
+- 1: 第X章, X., 一、二、三、
+- 2: X.X, （一）（二）, ①
+- 3: X.X.X, a. b. c.
 
-If all headings are already correct, return {"corrections": []}."""
+Return {"corrections": []} ONLY if truly no missed headings. Double-check before empty."""
 
 
 def detect_headings(
     api_key: str, base_url: str, model: str,
     paragraphs: list[dict],
 ) -> list[dict]:
-    """Send paragraph list to AI for heading level analysis.
-
-    Args:
-        paragraphs: [{"index": int, "heading_level": int|None, "text": str}, ...]
-
-    Returns:
-        List of corrections: [{"index": int, "heading_level": int, "reason": str}, ...]
-    """
+    """Send paragraph list to AI for heading level analysis."""
     from openai import OpenAI
 
-    # Build a compact representation: index, current level, first 80 chars
+    # Build clear representation: numbered index, level marker, FULL text
     lines = []
     for p in paragraphs:
         level = p.get("heading_level") or 0
-        text = (p.get("text") or "")[:80]
-        lines.append(f"[{p['index']}] Lv={level} | {text}")
+        text = (p.get("text") or "").strip()
+        marker = f"H{level}" if level > 0 else " · "
+        lines.append(f"[{p['index']:04d}] {marker} | {text}")
 
     para_text = "\n".join(lines)
-    user_prompt = f"""Review these {len(paragraphs)} paragraphs and identify any that should be headings but aren't marked correctly.
+    user_prompt = f"""Analyze {len(paragraphs)} paragraphs from a Chinese technical document.
 
-Current paragraph list (index, current level, text):
+Format: [index] marker | full_text
+  H1/H2/H3 = existing heading
+  · = normal text (check these!)
+
 {para_text}
 
-Return ONLY the JSON corrections. No other text."""
+Find ALL · (Lv=0) paragraphs that look like headings.
+Return ONLY JSON corrections."""
 
     client = OpenAI(api_key=api_key, base_url=base_url)
     _log.info("AI heading detect: sending %d paragraphs to %s", len(paragraphs), model)
@@ -91,14 +73,14 @@ Return ONLY the JSON corrections. No other text."""
                 {"role": "system", "content": HEADING_DETECT_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0.1,
+            temperature=0.3,
             max_tokens=4096,
         )
         elapsed = time.time() - t0
         content = response.choices[0].message.content or ""
-        _log.info("AI heading detect: %.1fs, response=%s", elapsed, content[:200])
+        _log.info("AI heading detect: %.1fs, response: %s", elapsed, content[:300])
 
-        # Parse JSON response
+        # Parse JSON
         json_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', content, re.DOTALL)
         if json_match:
             json_str = json_match.group(1)
@@ -109,7 +91,7 @@ Return ONLY the JSON corrections. No other text."""
 
         data = json.loads(json_str)
         corrections = data.get("corrections", [])
-        _log.info("AI heading detect: %d corrections suggested", len(corrections))
+        _log.info("AI heading detect: %d corrections", len(corrections))
         return corrections
 
     except Exception as e:
