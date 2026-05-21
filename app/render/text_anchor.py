@@ -108,7 +108,15 @@ class TextAnchorMapper:
         real paragraph breaks.
         """
         # 1. Collect all text/image blocks, grouped by page, sorted by y
+        # Filter out header/footer blocks that lie outside the main content area.
+        # Headers/footers are typically within 8% of the page edge.
         pages_blocks = {}  # page_num -> [(y0, x0, x1, y1, block_type)]
+
+        # Compute header/footer margins from first page dimensions
+        first_page = doc[0]
+        page_h = first_page.rect.height
+        header_margin = page_h * 0.08   # top 8% = header zone
+        footer_margin = page_h * 0.92   # bottom 8% = footer zone
 
         for page_index in range(len(doc)):
             page = doc[page_index]
@@ -119,11 +127,18 @@ class TextAnchorMapper:
                 block_type = block.get("type", 0)
                 w = bbox[2] - bbox[0]
                 h = bbox[3] - bbox[1]
-                if w > 20 and h > 6:
-                    page_list.append((
-                        bbox[0], bbox[1], bbox[2], bbox[3],
-                        "image" if block_type == 1 else "text"
-                    ))
+                if w < 20 or h < 6:
+                    continue
+                # Skip header region
+                if bbox[3] < header_margin:
+                    continue
+                # Skip footer region
+                if bbox[1] > footer_margin:
+                    continue
+                page_list.append((
+                    bbox[0], bbox[1], bbox[2], bbox[3],
+                    "image" if block_type == 1 else "text"
+                ))
             page_list.sort(key=lambda b: (b[1], b[0]))  # sort by y then x
             pages_blocks[page_index + 1] = page_list
 
