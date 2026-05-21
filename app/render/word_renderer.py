@@ -41,16 +41,22 @@ class WordRenderer:
         self._word.DisplayAlerts = False
 
     @com_retry(max_attempts=3, delay=2.0, exceptions=(Exception,))
-    def render_to_pdf(self, docx_path: Path, pdf_path: Path, password: str | None = None) -> Path:
+    def render_to_pdf(
+        self, docx_path: Path, pdf_path: Path,
+        password: str | None = None,
+        extract_positions: bool = False,
+    ) -> tuple[Path, list[dict] | None]:
         """Render a DOCX/DOC file to PDF using Word COM.
 
         Args:
             docx_path: Path to the input file (.docx or .doc)
             pdf_path: Path for the output PDF file
             password: Optional password for protected documents
+            extract_positions: If True, also extract paragraph positions from Word
 
         Returns:
-            Path to the generated PDF file
+            Tuple of (pdf_path, paragraph_positions_or_None)
+            Positions list: [{"page": int, "x0": float, "y0": float, "x1": float, "y1": float}, ...]
         """
         self._ensure_word_app()
 
@@ -60,6 +66,7 @@ class WordRenderer:
         logger.info(f"Rendering {docx_str} to PDF...")
 
         doc = None
+        positions = None
         try:
             if password:
                 doc = self._word.Documents.Open(docx_str, False, True, False, password)
@@ -75,12 +82,77 @@ class WordRenderer:
                 IncludeDocProps=True,
                 CreateBookmarks=1,  # wdExportCreateWordBookmarks
             )
+
+            if extract_positions:
+                positions = self._extract_paragraph_positions(doc)
         finally:
             if doc is not None:
                 doc.Close(SaveChanges=False)
 
         logger.info(f"PDF rendered: {pdf_str}")
-        return pdf_path
+        return pdf_path, positions
+
+    def _extract_paragraph_positions(self, doc) -> list[dict]:
+        """Extract paragraph positions from an open Word document.
+
+        Uses Word COM Range.Information() to get exact page and position
+        for each paragraph. These coordinates match the rendered PDF exactly
+        because they come from the same layout engine.
+        """
+        positions = []
+        page_setup = doc.PageSetup
+        page_w = page_setup.PageWidth
+        left_margin = page_setup.LeftMargin
+        right_margin = page_setup.RightMargin
+
+        total = doc.Paragraphs.Count
+        for i in range(1, total + 1):
+            try:
+                para = doc.Paragraphs(i)
+                rng = para.Range
+                # wdActiveEndPageNumber = 3
+                page_num = rng.Information(3)
+
+                # Skip empty trailing paragraphs
+                text = rng.Text.rstrip("\r\x0b\x07")
+                if not text.strip() and i > 1:
+                    continue
+
+                # wdVerticalPositionRelativeToPage = 6
+                y0 = rng.Information(6)
+                # wdHorizontalPositionRelativeToPage = 5
+                x0 = rng.Information(5)
+
+                # Use full text column width (page - margins)
+                if x0 < left_margin + 2:
+                    x0 = left_margin
+                x1 = page_w - right_margin
+
+                # Estimate height from next paragraph or use line height
+                if i < total:
+                    next_rng = doc.Paragraphs(i + 1).Range
+                    next_y0 = next_rng.Information(6)
+                    if next_y0 > y0:
+                        y1 = next_y0 - 2  # small gap
+                    else:
+                        y1 = y0 + 14  # fallback: ~1 line
+                else:
+                    y1 = y0 + 14  # last paragraph
+
+                positions.append({
+                    "para_index": i - 1,
+                    "page": int(page_num),
+                    "x0": float(x0),
+                    "y0": float(y0),
+                    "x1": float(x1),
+                    "y1": float(y1),
+                })
+            except Exception as e:
+                logger.warning(f"Position extraction failed for para {i}: {e}")
+                continue
+
+        logger.info(f"Extracted {len(positions)} paragraph positions from Word COM")
+        return positions
 
     def cleanup(self):
         """Quit Word application and release COM reference."""
@@ -109,16 +181,21 @@ class WordRenderer:
             logger.warning(f"Failed to force kill Word: {e}")
 
 
-def render_docx_to_pdf(docx_path: Path, pdf_path: Optional[Path] = None, password: str | None = None) -> Path:
+def render_docx_to_pdf(
+    docx_path: Path, pdf_path: Optional[Path] = None,
+    password: str | None = None,
+    extract_positions: bool = False,
+) -> Path | tuple[Path, list[dict] | None]:
     """Convenience function to render a DOCX/DOC to PDF.
 
     Args:
         docx_path: Path to the input file
         pdf_path: Optional path for output PDF. If None, uses same name with .pdf extension
         password: Optional password for protected documents
+        extract_positions: If True, return (pdf_path, positions_list)
 
     Returns:
-        Path to the generated PDF
+        Path to the generated PDF, or (pdf_path, positions) tuple
     """
     if pdf_path is None:
         pdf_path = docx_path.with_suffix(".pdf")
@@ -129,4 +206,11 @@ def render_docx_to_pdf(docx_path: Path, pdf_path: Optional[Path] = None, passwor
         timeout=settings.WORD_COM_TIMEOUT_SECONDS,
         retry_count=settings.WORD_COM_RETRY_COUNT,
     ) as renderer:
-        return renderer.render_to_pdf(docx_path, pdf_path, password=password)
+        result = renderer.render_to_pdf(
+            docx_path, pdf_path,
+            password=password,
+            extract_positions=extract_positions,
+        )
+        if extract_positions:
+            return result  # (pdf_path, positions)
+        return result[0]  # pdf_path only
