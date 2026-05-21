@@ -1,6 +1,7 @@
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QListWidget,
     QFileDialog, QListWidgetItem, QGroupBox, QMessageBox, QMenu,
+    QInputDialog, QLineEdit,
 )
 from PySide6.QtCore import Signal, Qt
 from PySide6.QtGui import QAction
@@ -99,15 +100,28 @@ class DocumentPanel(QGroupBox):
     def _on_upload(self):
         path, _ = QFileDialog.getOpenFileName(
             self, I18n.tr("doc.upload"), "",
-            "Word/PDF (*.docx *.pdf);;All Files (*)"
+            "Word/PDF (*.doc *.docx *.pdf);;All Files (*)"
         )
         if not path:
             return
 
+        from pathlib import Path
+
+        # Ask for password (optional — leave blank if not protected)
+        password, ok = QInputDialog.getText(
+            self,
+            I18n.tr("doc.password_title"),
+            I18n.tr("doc.password_prompt"),
+            QLineEdit.Password,
+            "",
+        )
+        if not ok:
+            return  # user cancelled
+
         from app.gui.worker import PipelineWorker
 
         self._uploading = True
-        self.worker = PipelineWorker(path)
+        self.worker = PipelineWorker(path, password=password.strip() or None)
         self.worker.finished.connect(self._on_pipeline_done)
         self.worker.error.connect(self._on_pipeline_error)
         self.worker.start()
@@ -125,6 +139,7 @@ class DocumentPanel(QGroupBox):
         self._uploading = False
         self.upload_btn.setEnabled(True)
         self.upload_btn.setText(I18n.tr("doc.upload"))
+        QMessageBox.warning(self, "", I18n.tr("doc.pipeline_error", error=error_msg))
 
     def _on_document_double_clicked(self, item: QListWidgetItem):
         doc_id = item.data(Qt.UserRole)

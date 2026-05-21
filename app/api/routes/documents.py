@@ -29,8 +29,8 @@ async def upload_document(
         raise HTTPException(status_code=400, detail="No filename provided")
 
     suffix = Path(file.filename).suffix.lower()
-    if suffix not in (".docx", ".pdf"):
-        raise HTTPException(status_code=400, detail="Only .docx and .pdf files are supported")
+    if suffix not in (".doc", ".docx", ".pdf"):
+        raise HTTPException(status_code=400, detail="Only .doc, .docx and .pdf files are supported")
 
     # Save file to storage
     temp_dir = settings.TEMP_DIR

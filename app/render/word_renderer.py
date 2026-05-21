@@ -1,3 +1,4 @@
+from __future__ import annotations
 import logging
 import os
 import subprocess
@@ -40,12 +41,13 @@ class WordRenderer:
         self._word.DisplayAlerts = False
 
     @com_retry(max_attempts=3, delay=2.0, exceptions=(Exception,))
-    def render_to_pdf(self, docx_path: Path, pdf_path: Path) -> Path:
-        """Render a DOCX file to PDF using Word COM.
+    def render_to_pdf(self, docx_path: Path, pdf_path: Path, password: str | None = None) -> Path:
+        """Render a DOCX/DOC file to PDF using Word COM.
 
         Args:
-            docx_path: Path to the input DOCX file
+            docx_path: Path to the input file (.docx or .doc)
             pdf_path: Path for the output PDF file
+            password: Optional password for protected documents
 
         Returns:
             Path to the generated PDF file
@@ -59,7 +61,10 @@ class WordRenderer:
 
         doc = None
         try:
-            doc = self._word.Documents.Open(docx_str)
+            if password:
+                doc = self._word.Documents.Open(docx_str, False, True, False, password)
+            else:
+                doc = self._word.Documents.Open(docx_str)
             doc.ExportAsFixedFormat(
                 OutputFileName=pdf_str,
                 ExportFormat=17,  # wdExportFormatPDF
@@ -104,12 +109,13 @@ class WordRenderer:
             logger.warning(f"Failed to force kill Word: {e}")
 
 
-def render_docx_to_pdf(docx_path: Path, pdf_path: Optional[Path] = None) -> Path:
-    """Convenience function to render a DOCX to PDF.
+def render_docx_to_pdf(docx_path: Path, pdf_path: Optional[Path] = None, password: str | None = None) -> Path:
+    """Convenience function to render a DOCX/DOC to PDF.
 
     Args:
-        docx_path: Path to the input DOCX file
+        docx_path: Path to the input file
         pdf_path: Optional path for output PDF. If None, uses same name with .pdf extension
+        password: Optional password for protected documents
 
     Returns:
         Path to the generated PDF
@@ -123,4 +129,4 @@ def render_docx_to_pdf(docx_path: Path, pdf_path: Optional[Path] = None) -> Path
         timeout=settings.WORD_COM_TIMEOUT_SECONDS,
         retry_count=settings.WORD_COM_RETRY_COUNT,
     ) as renderer:
-        return renderer.render_to_pdf(docx_path, pdf_path)
+        return renderer.render_to_pdf(docx_path, pdf_path, password=password)
