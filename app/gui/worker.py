@@ -165,14 +165,21 @@ class PipelineWorker(QThread):
         db.commit()
 
         from app.config.settings import settings
+        from uuid import uuid4
 
         docx_path = storage.get_path(doc.storage_key)
-        pdf_filename = self.file_path.stem + ".pdf"
+        # Use UUID to avoid collisions when re-uploading the same file
+        pdf_filename = f"{uuid4().hex}.pdf"
         pdf_path = settings.TEMP_DIR / pdf_filename
         pdf_path.parent.mkdir(parents=True, exist_ok=True)
 
-        render_docx_to_pdf(docx_path, pdf_path, password=self.password)
-        pdf_storage_key = storage.save_file(pdf_path, subdir="pdfs")
+        try:
+            render_docx_to_pdf(docx_path, pdf_path, password=self.password)
+            pdf_storage_key = storage.save_file(pdf_path, subdir="pdfs")
+        finally:
+            # Clean up temp PDF after copying to storage
+            if pdf_path.exists():
+                pdf_path.unlink(missing_ok=True)
 
         doc.pdf_storage_key = pdf_storage_key
         doc.status = "rendered"
