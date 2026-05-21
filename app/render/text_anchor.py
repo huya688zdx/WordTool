@@ -102,60 +102,79 @@ class TextAnchorMapper:
     ) -> List[CoordinateMapping]:
         """Strategy 0: Map paragraphs to PDF blocks by sequential position.
 
-        Uses a gap-based clustering: computes vertical gaps between consecutive
-        blocks on each page. The largest gaps are treated as paragraph boundaries.
-        This groups nearby lines (same paragraph) together while splitting at
-        real paragraph breaks.
-        """
-        # 1. Collect all text/image blocks, grouped by page, sorted by y
-        # Filter out header/footer blocks that lie outside the main content area.
-        # Headers/footers are typically within 8% of the page edge.
-        pages_blocks = {}  # page_num -> [(y0, x0, x1, y1, block_type)]
+        Uses adaptive gap clustering per page: computes the median vertical gap
+        between consecutive blocks, then merges blocks whose gap is less than
+        2× the median. This correctly groups lines belonging to the same paragraph
+        while treating large gaps as paragraph boundaries.
 
-        # Compute header/footer margins from first page dimensions
+        The algorithm:
+          1. Collect text blocks, filter out header/footer zones
+          2. Per page: compute gaps → median → merge threshold = max(2×median, 12pt)
+          3. Merge blocks with gap < threshold (same paragraph)
+          4. Flatten clusters across pages, map 1:1 to paragraphs
+        """
+        valid_paras = [p for p in paragraphs if p.full_text.strip() or p.is_image]
+        if not valid_paras:
+            return []
+
+        # 1. Collect blocks per page, filter headers/footers
         first_page = doc[0]
         page_h = first_page.rect.height
-        header_margin = page_h * 0.08   # top 8% = header zone
-        footer_margin = page_h * 0.92   # bottom 8% = footer zone
+        header_margin = page_h * 0.08
+        footer_margin = page_h * 0.92
 
+        pages_blocks = {}  # page_num -> [(x0, y0, x1, y1, type)]
         for page_index in range(len(doc)):
             page = doc[page_index]
             text_dict = page.get_text("dict")
             page_list = []
             for block in text_dict.get("blocks", []):
                 bbox = block.get("bbox", (0, 0, 0, 0))
-                block_type = block.get("type", 0)
                 w = bbox[2] - bbox[0]
                 h = bbox[3] - bbox[1]
                 if w < 20 or h < 6:
                     continue
-                # Skip header region
-                if bbox[3] < header_margin:
+                if bbox[3] < header_margin:   # header
                     continue
-                # Skip footer region
-                if bbox[1] > footer_margin:
+                if bbox[1] > footer_margin:   # footer
                     continue
                 page_list.append((
                     bbox[0], bbox[1], bbox[2], bbox[3],
-                    "image" if block_type == 1 else "text"
+                    "image" if block.get("type") == 1 else "text"
                 ))
-            page_list.sort(key=lambda b: (b[1], b[0]))  # sort by y then x
+            page_list.sort(key=lambda b: (b[1], b[0]))
             pages_blocks[page_index + 1] = page_list
 
-        # 2. Expand each block's bbox downward to capture nearby lines
-        # Same paragraph lines have very small gaps (< 5pt) in dense CJK docs.
-        # When blocks[j] is merged into blocks[i], we must remove it so the
-        # 1-to-1 sequential mapping doesn't shift — otherwise consumed blocks
-        # remain as separate entries and later paragraphs get wrong bboxes.
+        # 2. Per-page adaptive gap clustering
         for page_num in pages_blocks:
             blocks = pages_blocks[page_num]
+            if len(blocks) < 2:
+                continue
+
+            # Compute gaps between consecutive blocks (by their top edges)
+            gaps = []
+            for i in range(len(blocks) - 1):
+                g = blocks[i + 1][1] - blocks[i][3]  # next.y0 - current.y1
+                if g > 0:
+                    gaps.append(g)
+
+            if not gaps:
+                continue
+
+            # Median gap as baseline line spacing
+            gaps_sorted = sorted(gaps)
+            median_gap = gaps_sorted[len(gaps_sorted) // 2]
+            # Merge threshold: 2× median, but at least 12pt (covers dense CJK)
+            merge_threshold = max(median_gap * 2.0, 12.0)
+
+            # Merge blocks within same paragraph
             i = 0
             while i < len(blocks):
                 j = i + 1
                 while j < len(blocks):
                     gap = blocks[j][1] - blocks[i][3]
-                    if gap < 5:  # nearly touching = same paragraph
-                        # Expand current bbox to include blocks[j]
+                    if gap < merge_threshold:
+                        # Merge blocks[j] into blocks[i]
                         blocks[i] = (
                             min(blocks[i][0], blocks[j][0]),
                             blocks[i][1],
@@ -164,22 +183,53 @@ class TextAnchorMapper:
                             blocks[i][4],
                         )
                         blocks.pop(j)
-                        # don't increment j — check next block
                     else:
                         break
                 i += 1
 
-        # Flatten to single list, keeping page order
-        all_blocks = []
+        # 3. Build ordered per-page cluster lists
+        page_clusters = {}  # page_num -> [(x0, y0, x1, y1, type)]
         for page_num in sorted(pages_blocks.keys()):
-            for b in pages_blocks[page_num]:
-                all_blocks.append((page_num, b[0], b[1], b[2], b[3], b[4]))
+            page_clusters[page_num] = list(pages_blocks[page_num])
 
-        valid_paras = [p for p in paragraphs if p.full_text.strip() or p.is_image]
+        total_clusters = sum(len(v) for v in page_clusters.values())
+        if total_clusters == 0:
+            return []
+
+        total_paras = len(valid_paras)
+
+        # 4. Distribute paragraphs across pages proportionally
+        # Each page gets paragraphs in proportion to its share of text clusters.
+        # This prevents cross-page drift: errors on one page don't affect others.
+        page_para_counts = {}
+        assigned = 0
+        page_nums = sorted(page_clusters.keys())
+        for idx, pn in enumerate(page_nums):
+            if idx == len(page_nums) - 1:
+                # Last page gets all remaining paragraphs
+                page_para_counts[pn] = total_paras - assigned
+            else:
+                ratio = len(page_clusters[pn]) / total_clusters
+                count = max(1, round(total_paras * ratio))
+                page_para_counts[pn] = min(count, total_paras - assigned)
+            assigned += page_para_counts[pn]
+            if assigned >= total_paras:
+                # Assign zero to remaining pages
+                for later_pn in page_nums[idx + 1:]:
+                    page_para_counts[later_pn] = 0
+                break
+
+        # 5. Map paragraphs to clusters per page
         mappings = []
-        for i, para in enumerate(valid_paras):
-            if i < len(all_blocks):
-                page_num, x0, y0, x1, y1, btype = all_blocks[i]
+        para_idx = 0
+        for page_num in page_nums:
+            clusters = page_clusters[page_num]
+            n_paras = page_para_counts.get(page_num, 0)
+            for c_idx in range(min(n_paras, len(clusters))):
+                if para_idx >= total_paras:
+                    break
+                para = valid_paras[para_idx]
+                x0, y0, x1, y1, btype = clusters[c_idx]
                 strategy = "image_block" if btype == "image" else "position_based"
                 mappings.append(CoordinateMapping(
                     paragraph_id=para.para_index,
@@ -188,6 +238,7 @@ class TextAnchorMapper:
                     confidence=0.5,
                     strategy=strategy,
                 ))
+                para_idx += 1
 
         return mappings
 

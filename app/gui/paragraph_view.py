@@ -183,33 +183,93 @@ class ParagraphView(QGroupBox):
             child_item = self._make_section_item(child_node)
             item.addChild(child_item)
 
-        # Add leaf paragraphs
-        for pid in node.paragraph_ids:
-            para = self._para_map.get(pid)
-            if para is None:
-                continue
-            leaf_texts = [
-                str(para.para_index),
-                para.full_text[:100],
-                para.style_name or "-",
-                I18n.tr("para.image_marker") if para.is_image else ("⚡" if para.has_highlights else "-"),
-                "✏" if para.has_revisions else "-",
-            ]
-            leaf_item = QTreeWidgetItem(leaf_texts)
-            leaf_item.setData(1, Qt.UserRole, para.id)
-
-            if para.has_highlights:
-                yellow = QColor(255, 255, 200)
-                for col in range(5):
-                    leaf_item.setBackground(col, QBrush(yellow))
-            elif para.is_image:
-                blue = QColor(200, 220, 255)
-                for col in range(5):
-                    leaf_item.setBackground(col, QBrush(blue))
-
-            item.addChild(leaf_item)
+        # Add leaf paragraphs — group consecutive ones into segments
+        if node.paragraph_ids:
+            # Sort paragraph IDs by their para_index for correct ordering
+            sorted_ids = sorted(
+                node.paragraph_ids,
+                key=lambda pid: self._para_map[pid].para_index if pid in self._para_map else 0
+            )
+            self._add_paragraph_segments(item, sorted_ids)
 
         return item
+
+    def _add_paragraph_segments(self, parent_item: QTreeWidgetItem, para_ids: list[str]):
+        """Group consecutive non-heading paragraphs into segments (~8 per group)
+        to avoid showing hundreds of single-line items in the tree.
+        """
+        SEGMENT_SIZE = 8
+        for chunk_start in range(0, len(para_ids), SEGMENT_SIZE):
+            chunk_ids = para_ids[chunk_start:chunk_start + SEGMENT_SIZE]
+            if len(chunk_ids) == 1:
+                # Single paragraph — show directly as leaf
+                pid = chunk_ids[0]
+                para = self._para_map.get(pid)
+                if para is None:
+                    continue
+                leaf_texts = [
+                    str(para.para_index),
+                    para.full_text[:100],
+                    para.style_name or "-",
+                    I18n.tr("para.image_marker") if para.is_image else ("⚡" if para.has_highlights else "-"),
+                    "✏" if para.has_revisions else "-",
+                ]
+                leaf_item = QTreeWidgetItem(leaf_texts)
+                leaf_item.setData(1, Qt.UserRole, para.id)
+                self._color_item(leaf_item, para)
+                parent_item.addChild(leaf_item)
+            else:
+                # Group of consecutive paragraphs — create a segment node
+                first_para = self._para_map.get(chunk_ids[0])
+                last_para = self._para_map.get(chunk_ids[-1])
+                if first_para is None:
+                    continue
+                start_idx = first_para.para_index
+                end_idx = last_para.para_index if last_para else start_idx
+                preview = first_para.full_text[:80]
+                has_hl = any(
+                    self._para_map.get(pid) and self._para_map[pid].has_highlights
+                    for pid in chunk_ids
+                )
+                has_rev = any(
+                    self._para_map.get(pid) and self._para_map[pid].has_revisions
+                    for pid in chunk_ids
+                )
+                seg_texts = [
+                    f"{start_idx}-{end_idx}",
+                    f"[{len(chunk_ids)} {I18n.tr('para.section_children', count=len(chunk_ids))}] {preview}",
+                    "-",
+                    "⚡" if has_hl else "-",
+                    "✏" if has_rev else "-",
+                ]
+                seg_item = QTreeWidgetItem(seg_texts)
+                # Store a synthetic SectionNode for the segment
+                seg_node = SectionNode(
+                    heading_paragraph_id=None,
+                    heading_level=0,
+                    title=preview,
+                    para_index=start_idx,
+                    paragraph_ids=chunk_ids,
+                    has_highlights=has_hl,
+                    has_revisions=has_rev,
+                )
+                seg_item.setData(1, Qt.UserRole + 1, seg_node)
+                if has_hl:
+                    yellow = QColor(255, 255, 200)
+                    for col in range(5):
+                        seg_item.setBackground(col, QBrush(yellow))
+                parent_item.addChild(seg_item)
+
+    @staticmethod
+    def _color_item(item: QTreeWidgetItem, para):
+        if para.has_highlights:
+            yellow = QColor(255, 255, 200)
+            for col in range(5):
+                item.setBackground(col, QBrush(yellow))
+        elif para.is_image:
+            blue = QColor(200, 220, 255)
+            for col in range(5):
+                item.setBackground(col, QBrush(blue))
 
     def _on_item_clicked(self, item: QTreeWidgetItem, col: int):
         if self._document_id is None:
