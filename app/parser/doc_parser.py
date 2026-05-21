@@ -34,6 +34,10 @@ def parse_doc_via_com(file_path: Path, password: str | None = None) -> list[Para
         word = win32com.client.DispatchEx("Word.Application")
         word.Visible = False
         word.DisplayAlerts = False
+        try:
+            word.AutomationSecurity = 1  # suppress Word password dialogs
+        except Exception:
+            pass
 
         file_str = str(file_path.resolve())
         if password:

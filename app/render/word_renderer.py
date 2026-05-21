@@ -39,6 +39,11 @@ class WordRenderer:
         self._word = win32com.client.DispatchEx("Word.Application")
         self._word.Visible = False
         self._word.DisplayAlerts = False
+        # Prevent Word from showing its own password/security dialogs
+        try:
+            self._word.AutomationSecurity = 1  # msoAutomationSecurityForceDisable
+        except Exception:
+            pass
 
     @com_retry(max_attempts=3, delay=2.0, exceptions=(Exception,))
     def render_to_pdf(

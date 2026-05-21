@@ -144,7 +144,7 @@ class PipelineWorker(QThread):
 
         from app.parser.doc_parser import parse_doc_via_com
         docx_path = storage.get_path(doc.storage_key)
-        paragraphs_data = parse_doc_via_com(docx_path)
+        paragraphs_data = parse_doc_via_com(docx_path, password=self.password)
 
         for para_data in paragraphs_data:
             paragraph = Paragraph(
