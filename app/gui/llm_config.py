@@ -83,6 +83,18 @@ class LLMConfigWidget(QGroupBox):
         ai_row.addStretch()
         main_layout.addLayout(ai_row)
 
+        # Default document password row
+        pw_row = QHBoxLayout()
+        self.doc_pw_label = QLabel(I18n.tr("llm.doc_default_password"))
+        pw_row.addWidget(self.doc_pw_label)
+        self.doc_password_input = QLineEdit()
+        self.doc_password_input.setEchoMode(QLineEdit.Password)
+        self.doc_password_input.setPlaceholderText(I18n.tr("llm.doc_password_hint"))
+        self.doc_password_input.setMinimumWidth(150)
+        pw_row.addWidget(self.doc_password_input)
+        pw_row.addStretch()
+        main_layout.addLayout(pw_row)
+
     def refresh_text(self):
         self.setTitle(I18n.tr("llm.title"))
         self.provider_label.setText(I18n.tr("llm.provider"))
@@ -92,6 +104,8 @@ class LLMConfigWidget(QGroupBox):
         self.api_key_input.setPlaceholderText(I18n.tr("llm.api_key_placeholder"))
         self.test_btn.setText(I18n.tr("llm.test"))
         self.ai_visual_check.setText(I18n.tr("llm.ai_visual"))
+        self.doc_pw_label.setText(I18n.tr("llm.doc_default_password"))
+        self.doc_password_input.setPlaceholderText(I18n.tr("llm.doc_password_hint"))
 
     def _on_provider_changed(self, name: str):
         config = LLMClient.PROVIDER_CONFIGS.get(name)
@@ -125,6 +139,8 @@ class LLMConfigWidget(QGroupBox):
         if data.get("model"):
             self.model_input.setText(data["model"])
         self.ai_visual_check.setChecked(data.get("ai_visual_enabled", False))
+        if data.get("doc_default_password"):
+            self.doc_password_input.setText(data["doc_default_password"])
 
     def save(self):
         """Persist current config to disk."""
@@ -133,7 +149,11 @@ class LLMConfigWidget(QGroupBox):
             "base_url": self.get_base_url(),
             "model": self.get_model(),
             "ai_visual_enabled": self.is_ai_visual_enabled(),
+            "doc_default_password": self.get_doc_default_password(),
         })
+
+    def get_doc_default_password(self) -> str:
+        return self.doc_password_input.text().strip()
 
     def is_ai_visual_enabled(self) -> bool:
         return self.ai_visual_check.isChecked()

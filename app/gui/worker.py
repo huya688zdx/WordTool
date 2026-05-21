@@ -52,10 +52,11 @@ class PipelineWorker(QThread):
             finally:
                 db.close()
         except Exception as e:
-            msg = str(e)
-            if "password" in msg.lower() or "protected" in msg.lower():
+            msg = str(e).lower()
+            if "password" in msg or "protected" in msg or "encrypted" in msg or "cannot open" in msg:
                 self.password_needed.emit()
-            self.error.emit(msg)
+            else:
+                self.error.emit(str(e))
 
     def _create_document(self, db):
         suffix = self.file_path.suffix.lower()

@@ -1,3 +1,6 @@
+from __future__ import annotations
+from pathlib import Path
+
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QListWidget,
     QFileDialog, QListWidgetItem, QGroupBox, QMessageBox, QMenu,
@@ -12,6 +15,18 @@ from app.models.paragraph import Paragraph
 from app.models.coordinate import PDFCoordinate
 from app.storage.local_fs import storage
 from app.gui.i18n import I18n
+
+
+def _is_docx_encrypted(file_path: Path) -> bool:
+    """Check if a .docx file is password-protected by looking for EncryptionInfo."""
+    if file_path.suffix.lower() != ".docx":
+        return False
+    import zipfile
+    try:
+        with zipfile.ZipFile(file_path) as z:
+            return "EncryptionInfo" in z.namelist()
+    except (zipfile.BadZipFile, OSError):
+        return False
 
 
 def delete_document(document_id: str) -> None:
@@ -106,28 +121,78 @@ class DocumentPanel(QGroupBox):
             return
 
         from pathlib import Path
+        file_path = Path(path)
 
-        # Ask for password (optional — leave blank if not protected)
-        password, ok = QInputDialog.getText(
+        # Detect if document is encrypted
+        password = None
+        if _is_docx_encrypted(file_path):
+            password = self._resolve_password(file_path.name)
+
+        if password is None:
+            # .doc files — can't detect encryption without opening,
+            # try without password first; worker will emit password_needed if needed
+            pass
+
+        self._start_worker(path, password)
+
+    def _resolve_password(self, filename: str) -> str | None:
+        """Try saved password first, fall back to user prompt.
+
+        Returns None if user cancels the dialog.
+        """
+        from app.gui.llm_config import _load_config
+
+        # 1. Try saved default password from settings
+        cfg = _load_config()
+        saved_pw = cfg.get("doc_default_password", "")
+        if saved_pw:
+            return saved_pw
+
+        # 2. No saved password — ask user
+        return self._prompt_password(filename)
+
+    def _prompt_password(self, filename: str) -> str | None:
+        pw, ok = QInputDialog.getText(
             self,
             I18n.tr("doc.password_title"),
-            I18n.tr("doc.password_prompt"),
+            I18n.tr("doc.password_prompt", filename=filename),
             QLineEdit.Password,
             "",
         )
-        if not ok:
-            return  # user cancelled
+        if ok and pw.strip():
+            return pw.strip()
+        return None
 
+    def _start_worker(self, path: str, password: str | None):
         from app.gui.worker import PipelineWorker
 
         self._uploading = True
-        self.worker = PipelineWorker(path, password=password.strip() or None)
+        self.worker = PipelineWorker(path, password=password)
         self.worker.finished.connect(self._on_pipeline_done)
         self.worker.error.connect(self._on_pipeline_error)
+        self.worker.password_needed.connect(self._on_password_needed)
         self.worker.start()
 
         self.upload_btn.setEnabled(False)
         self.upload_btn.setText(I18n.tr("doc.uploading"))
+
+    def _on_password_needed(self):
+        """Worker detected a password-protected document mid-pipeline.
+        Prompt user, then restart worker with the provided password."""
+        pw, ok = QInputDialog.getText(
+            self,
+            I18n.tr("doc.password_title"),
+            I18n.tr("doc.password_incorrect"),
+            QLineEdit.Password,
+            "",
+        )
+        if ok and pw.strip():
+            # Restart worker with user-provided password
+            self._start_worker(str(self.worker.file_path), pw.strip())
+        else:
+            self._uploading = False
+            self.upload_btn.setEnabled(True)
+            self.upload_btn.setText(I18n.tr("doc.upload"))
 
     def _on_pipeline_done(self, document_id, result):
         self._uploading = False

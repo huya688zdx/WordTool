@@ -145,7 +145,7 @@ class MainWindow(QMainWindow):
     def _show_llm_settings(self):
         dialog = QDialog(self)
         dialog.setWindowTitle(I18n.tr("settings.title"))
-        dialog.resize(750, 180)
+        dialog.resize(750, 240)
         layout = QVBoxLayout(dialog)
 
         llm_copy = LLMConfigWidget()
@@ -153,6 +153,7 @@ class MainWindow(QMainWindow):
         llm_copy.base_url_input.setText(self.llm_config.get_base_url())
         llm_copy.model_input.setText(self.llm_config.get_model())
         llm_copy.ai_visual_check.setChecked(self.llm_config.is_ai_visual_enabled())
+        llm_copy.doc_password_input.setText(self.llm_config.get_doc_default_password())
         layout.addWidget(llm_copy)
 
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
@@ -165,6 +166,7 @@ class MainWindow(QMainWindow):
             self.llm_config.base_url_input.setText(llm_copy.get_base_url())
             self.llm_config.model_input.setText(llm_copy.get_model())
             self.llm_config.ai_visual_check.setChecked(llm_copy.is_ai_visual_enabled())
+            self.llm_config.doc_password_input.setText(llm_copy.get_doc_default_password())
             self.llm_config.save()
 
     def _on_document_selected(self, document_id: str):
