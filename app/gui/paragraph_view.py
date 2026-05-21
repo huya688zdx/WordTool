@@ -13,27 +13,35 @@ from app.gui.i18n import I18n
 
 
 def build_section_tree(paragraphs: list[Paragraph]) -> SectionNode:
-    """Build a section hierarchy from a flat list of paragraphs.
+    """Build a single-level section hierarchy.
 
-    Heading paragraphs become section parent nodes; non-heading paragraphs
-    become leaf children of the nearest ancestor heading.
+    Only the topmost heading level becomes sections. All sub-headings
+    and body paragraphs are flattened as leaf content under their
+    parent section. This creates a flat, easy-to-navigate tree view.
     """
+    if not paragraphs:
+        return SectionNode(heading_paragraph_id=None, heading_level=0, title="", para_index=0)
+
+    # Find the minimum (topmost) heading level in the document
+    min_level = 9
+    for para in paragraphs:
+        if para.heading_level is not None and 1 <= para.heading_level <= 9:
+            min_level = min(min_level, para.heading_level)
+
     root = SectionNode(
         heading_paragraph_id=None,
         heading_level=0,
         title="",
         para_index=0,
     )
-    stack: list[tuple[SectionNode, int]] = [(root, 0)]
+    current_section = root  # current top-level section node
 
     for para in paragraphs:
-        if para.heading_level is not None and para.heading_level > 0:
-            level = para.heading_level
-            while stack and stack[-1][1] >= level:
-                stack.pop()
+        if para.heading_level is not None and para.heading_level == min_level:
+            # Top-level heading → new section
             node = SectionNode(
                 heading_paragraph_id=para.id,
-                heading_level=level,
+                heading_level=para.heading_level,
                 title=para.full_text,
                 para_index=para.para_index,
                 style_name=para.style_name,
@@ -41,10 +49,11 @@ def build_section_tree(paragraphs: list[Paragraph]) -> SectionNode:
                 has_revisions=para.has_revisions,
                 is_image=para.is_image,
             )
-            stack[-1][0].children.append(node)
-            stack.append((node, level))
+            root.children.append(node)
+            current_section = node
         else:
-            stack[-1][0].paragraph_ids.append(para.id)
+            # Sub-heading or body paragraph → flattened into current section
+            current_section.paragraph_ids.append(para.id)
 
     return root
 
