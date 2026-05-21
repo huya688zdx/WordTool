@@ -199,7 +199,26 @@ class PipelineWorker(QThread):
             para_data_list.append(pd)
 
         pdf_path = storage.get_path(doc.pdf_storage_key)
-        mappings = map_paragraphs_to_pdf(para_data_list, str(pdf_path))
+
+        # Try AI visual detection if LLM config is available
+        visual_detector = None
+        try:
+            from app.gui.llm_config import _load_config
+            llm_cfg = _load_config()
+            if llm_cfg.get("api_key") and llm_cfg.get("base_url") and llm_cfg.get("model"):
+                from app.ai.visual_detector import VisualPageDetector
+                visual_detector = VisualPageDetector(
+                    api_key=llm_cfg["api_key"],
+                    base_url=llm_cfg["base_url"],
+                    model=llm_cfg["model"],
+                )
+        except Exception:
+            pass  # AI not configured — use text search + position fallback only
+
+        mappings = map_paragraphs_to_pdf(
+            para_data_list, str(pdf_path),
+            visual_detector=visual_detector,
+        )
 
         for mapping in mappings:
             para = next(

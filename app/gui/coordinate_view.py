@@ -82,7 +82,7 @@ class CoordinateView(QGroupBox):
                     self._last_pdf_path, self._last_coord.page_number,
                     (self._last_coord.bbox_x0, self._last_coord.bbox_y0,
                      self._last_coord.bbox_x1, self._last_coord.bbox_y1),
-                    padding=5, zoom=self._zoom,
+                    padding=15, zoom=self._zoom,
                 )
                 pixmap = QPixmap()
                 pixmap.loadFromData(image_bytes)

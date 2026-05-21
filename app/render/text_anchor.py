@@ -29,12 +29,14 @@ class TextAnchorMapper:
         self,
         min_confidence: Optional[float] = None,
         chunk_size: Optional[int] = None,
+        visual_detector=None,
     ):
         self._min_confidence = min_confidence or settings.TEXT_ANCHOR_MIN_CONFIDENCE
         self._chunk_size = chunk_size or settings.TEXT_ANCHOR_CHUNK_SIZE
         self._pdf_parser = PDFParser()
         self._cursor_page = 0
         self._cursor_y = 0.0
+        self._visual_detector = visual_detector
 
     def map_paragraphs(
         self,
@@ -68,7 +70,16 @@ class TextAnchorMapper:
                         self._cursor_page = mapping.page_number
                         self._cursor_y = mapping.bbox[3]
 
-            # Step 2: Fill unmapped paragraphs with position-based estimation
+            # Step 2: AI visual detection for pages with poor text search coverage
+            if self._visual_detector is not None:
+                ai_mappings = self._strategy_ai_visual(
+                    paragraphs, doc, text_mappings
+                )
+                for am in ai_mappings:
+                    if am.paragraph_id not in text_mappings:
+                        text_mappings[am.paragraph_id] = am
+
+            # Step 3: Fill remaining gaps with position-based estimation
             position_mappings = self._strategy_position_based(paragraphs, doc)
             for pm in position_mappings:
                 if pm.paragraph_id not in text_mappings:
@@ -240,6 +251,83 @@ class TextAnchorMapper:
                 ))
                 para_idx += 1
 
+        return mappings
+
+    def _strategy_ai_visual(
+        self,
+        paragraphs: List[ParagraphData],
+        doc: fitz.Document,
+        existing_mappings: dict,
+    ) -> List[CoordinateMapping]:
+        """Strategy 4: Use AI vision model to detect paragraph positions.
+
+        Sends page screenshots to a vision-capable LLM. Called once per page
+        that has unmapped paragraphs after text search fails.
+        """
+        from app.render.page_cropper import PageCropper
+
+        # Find which paragraphs are still unmapped
+        valid_paras = [p for p in paragraphs if p.full_text.strip() or p.is_image]
+        unmapped_paras = [p for p in valid_paras if p.para_index not in existing_mappings]
+        if not unmapped_paras:
+            return []
+
+        # Group unmapped paragraphs by page (we don't know their pages yet,
+        # so process all pages that likely have unmapped content)
+        # Strategy: process pages in order, ask AI for all paragraphs on each page
+        cropper = PageCropper()
+        total_pages = len(doc)
+        all_detected = []  # (para_index, page_num, bbox, strategy)
+
+        # Collect all pages' images
+        for page_index in range(total_pages):
+            page_num = page_index + 1
+            try:
+                image_bytes = cropper.get_page_thumbnail(
+                    Path(doc.name), page_num, max_width=1200,
+                )
+                detections = self._visual_detector.detect(
+                    image_bytes,
+                    page_number=page_num,
+                    total_pages=total_pages,
+                )
+                for det in detections:
+                    all_detected.append({
+                        "para_index": det.get("index", 0),
+                        "page_num": page_num,
+                        "x0": det.get("x0", 0),
+                        "y0": det.get("y0", 0),
+                        "x1": det.get("x1", 0),
+                        "y1": det.get("y1", 0),
+                        "det_type": det.get("type", "text"),
+                    })
+            except Exception as e:
+                logger.warning(f"AI visual detection failed for page {page_num}: {e}")
+                continue
+
+        if not all_detected:
+            return []
+
+        # Map AI detections to our paragraphs by sequential order
+        # Sort detections by (page_num, y0)
+        all_detected.sort(key=lambda d: (d["page_num"], d["y0"]))
+
+        mappings = []
+        # Map detections to unmapped paragraphs in order
+        for i, det in enumerate(all_detected):
+            if i >= len(unmapped_paras):
+                break
+            para = unmapped_paras[i]
+            strategy = "ai_visual_heading" if det["det_type"] == "heading" else "ai_visual"
+            mappings.append(CoordinateMapping(
+                paragraph_id=para.para_index,
+                page_number=det["page_num"],
+                bbox=(det["x0"], det["y0"], det["x1"], det["y1"]),
+                confidence=0.85,
+                strategy=strategy,
+            ))
+
+        logger.info(f"AI visual: mapped {len(mappings)} paragraphs across {total_pages} pages")
         return mappings
 
     def _map_single_paragraph(
@@ -439,6 +527,7 @@ class TextAnchorMapper:
 def map_paragraphs_to_pdf(
     paragraphs: List[ParagraphData],
     pdf_path: str,
+    visual_detector=None,
 ) -> List[CoordinateMapping]:
-    mapper = TextAnchorMapper()
+    mapper = TextAnchorMapper(visual_detector=visual_detector)
     return mapper.map_paragraphs(paragraphs, pdf_path)
