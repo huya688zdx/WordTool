@@ -62,6 +62,36 @@ class PageCropper:
         )
         return self.crop_paragraph(pdf_path, page_number, expanded_bbox)
 
+    def crop_union(
+        self,
+        pdf_path: Path,
+        page_number: int,
+        bboxes: list,
+        padding: float = 10.0,
+        zoom: float = 2.0,
+    ) -> bytes:
+        """Crop the union bounding box of multiple bboxes on a single page.
+
+        Args:
+            pdf_path: Path to the PDF file
+            page_number: 1-based page number
+            bboxes: List of (x0, y0, x1, y1) bounding boxes
+            padding: Padding around the union bbox in points
+            zoom: Zoom factor for output resolution
+
+        Returns:
+            PNG image bytes
+        """
+        if not bboxes:
+            return b""
+        union = list(bboxes[0])
+        for b in bboxes[1:]:
+            union[0] = min(union[0], b[0])
+            union[1] = min(union[1], b[1])
+            union[2] = max(union[2], b[2])
+            union[3] = max(union[3], b[3])
+        return self.crop_paragraph(pdf_path, page_number, tuple(union), padding, zoom)
+
     def get_page_thumbnail(
         self,
         pdf_path: Path,

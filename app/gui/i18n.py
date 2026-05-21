@@ -78,6 +78,12 @@ _translations = {
         "settings.llm_title": "LLM Configuration",
         "settings.save": "Save",
         "settings.cancel": "Cancel",
+        "para.expand_all": "Expand All",
+        "para.collapse_all": "Collapse All",
+        "para.section_children": "{count} paragraphs",
+        "para.orphan_section": "(No Heading)",
+        "coord.section_page": "Pages {start}-{end}",
+        "coord.section_info": "Section: {title} | {count} paragraphs | Page {page}",
     },
     "ja": {
         "app.title": "WordAgent - AI要件追跡システム",
@@ -150,6 +156,12 @@ _translations = {
         "settings.llm_title": "LLM設定",
         "settings.save": "保存",
         "settings.cancel": "キャンセル",
+        "para.expand_all": "すべて展開",
+        "para.collapse_all": "すべて折りたたむ",
+        "para.section_children": "{count}個の段落",
+        "para.orphan_section": "(見出しなし)",
+        "coord.section_page": "{start}-{end}ページ",
+        "coord.section_info": "セクション: {title} | {count}段落 | {page}ページ",
     },
     "zh": {
         "app.title": "WordAgent - AI 需求变更追踪系统",
@@ -222,6 +234,12 @@ _translations = {
         "settings.llm_title": "大模型配置",
         "settings.save": "保存",
         "settings.cancel": "取消",
+        "para.expand_all": "全部展开",
+        "para.collapse_all": "全部折叠",
+        "para.section_children": "{count}个段落",
+        "para.orphan_section": "(无标题)",
+        "coord.section_page": "第{start}-{end}页",
+        "coord.section_info": "章节: {title} | {count}个段落 | 第{page}页",
     },
 }
 

@@ -1,3 +1,4 @@
+from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -43,6 +44,37 @@ class ParagraphData:
 class DocumentStructure:
     paragraphs: List[ParagraphData] = field(default_factory=list)
     metadata: dict = field(default_factory=dict)
+
+
+def _detect_heading_level(ppr) -> int | None:
+    """Detect heading level from paragraph properties.
+
+    Checks outlineLvl first (most reliable), then pStyle name patterns
+    including English 'HeadingN', Chinese '标题 N', and numbered variants.
+    """
+    if ppr is None:
+        return None
+    # 1. outlineLvl — the most reliable indicator (0 = Heading 1)
+    outline = find_child(ppr, "w:outlineLvl")
+    if outline is not None:
+        try:
+            return int(outline.get(qn("w:val"))) + 1
+        except (ValueError, TypeError):
+            pass
+    # 2. pStyle name patterns
+    pstyle = find_child(ppr, "w:pStyle")
+    if pstyle is not None:
+        name = pstyle.get(qn("w:val"), "")
+        if not name:
+            return None
+        for prefix in ("Heading", "标题", "heading"):
+            if name.startswith(prefix):
+                suffix = name[len(prefix):].strip()
+                try:
+                    return int(suffix)
+                except ValueError:
+                    pass
+    return None
 
 
 class DocxParser:
@@ -125,11 +157,7 @@ class DocxParser:
             pstyle = find_child(ppr, "w:pStyle")
             if pstyle is not None:
                 style_name = pstyle.get(qn("w:val"))
-                if style_name and style_name.startswith("Heading"):
-                    try:
-                        heading_level = int(style_name.replace("Heading", ""))
-                    except ValueError:
-                        pass
+            heading_level = _detect_heading_level(ppr)
 
         # Parse child elements
         run_index = 0

@@ -112,6 +112,7 @@ class MainWindow(QMainWindow):
         self.document_panel.document_selected.connect(self._on_document_selected)
         self.pipeline_panel.status_changed.connect(self.statusbar.showMessage)
         self.paragraph_view.paragraph_selected.connect(self._on_paragraph_selected)
+        self.paragraph_view.section_selected.connect(self._on_section_selected)
         self.ai_analysis.analysis_requested.connect(self._on_analysis_requested)
         I18n.instance().language_changed.connect(lambda _: self._refresh_ui_text())
 
@@ -168,6 +169,9 @@ class MainWindow(QMainWindow):
 
     def _on_paragraph_selected(self, paragraph_id: str, document_id: str):
         self.coordinate_view.load_coordinates(paragraph_id, document_id)
+
+    def _on_section_selected(self, section_node, document_id: str):
+        self.coordinate_view.load_section_coordinates(section_node, document_id)
 
     def _on_analysis_requested(self, paragraph_text: str):
         api_key = self.llm_config.get_api_key()
