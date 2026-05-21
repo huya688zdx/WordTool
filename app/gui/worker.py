@@ -39,6 +39,10 @@ class PipelineWorker(QThread):
                 if doc.original_format == "doc":
                     self.progress.emit("解析 .doc 结构（通过 Word COM）...")
                     self._parse_doc_via_com(doc, db)
+                elif self.password:
+                    # Encrypted .docx — python-docx can't open it, use Word COM
+                    self.progress.emit("解析加密 DOCX 结构（通过 Word COM）...")
+                    self._parse_doc_via_com(doc, db)
                 else:
                     self.progress.emit("解析 DOCX 结构...")
                     self._parse_docx(doc, db)
