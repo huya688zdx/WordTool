@@ -98,7 +98,7 @@ class VisualPageDetector:
                 model=self.model,
                 messages=messages,
                 temperature=0.1,  # low temperature for precise coordinates
-                max_tokens=4096,
+                max_tokens=16384,
             )
             elapsed = time.time() - t0
             content = response.choices[0].message.content or ""

@@ -77,38 +77,32 @@ class TextAnchorMapper:
                         self._cursor_page = mapping.page_number
                         self._cursor_y = mapping.bbox[3]
 
-            # Step 2: AI visual detection — used when text search is unreliable
-            # (garbled CJK PDFs) or when many paragraphs remain unmapped
             total_valid = len([p for p in paragraphs if p.full_text.strip() or p.is_image])
             mapped_count = len(text_mappings)
             coverage = mapped_count / max(total_valid, 1)
             ai_available = self._visual_detector is not None
 
-            if not ai_available:
-                logger.info("AI visual: 未配置（visual_detector=None）")
-            elif is_garbled:
+            # Step 2: AI visual detection — PRIMARY strategy when enabled and needed.
+            # When AI is enabled and text quality is poor, AI REPLACES all mappings
+            # (not just fills gaps). Previous text search results are discarded.
+            if ai_available and (is_garbled or coverage < 0.5):
                 logger.info(
-                    f"AI visual: PDF文本乱码，启用AI检测 "
-                    f"(文字搜索命中 {mapped_count}/{total_valid} = {coverage:.0%})"
+                    f"AI visual: PDF文本乱码={is_garbled} 文字搜索覆盖={coverage:.0%}，"
+                    f"AI 作为主力策略，替换全部 {mapped_count} 个文本搜索结果"
                 )
-            elif coverage < 0.5:
-                logger.info(
-                    f"AI visual: 文字搜索覆盖率低 ({mapped_count}/{total_valid} = {coverage:.0%})，启用AI检测"
-                )
+                ai_mappings = self._strategy_ai_visual(paragraphs, doc)
+                # AI replaces text search — start fresh
+                text_mappings = {}
+                for am in ai_mappings:
+                    text_mappings[am.paragraph_id] = am
+                logger.info(f"AI visual: 共映射 {len(ai_mappings)} 个段落")
+            elif not ai_available:
+                logger.info("AI visual: 未配置（visual_detector=None），使用文字搜索+位置兜底")
             else:
                 logger.info(
-                    f"AI visual: 文字搜索覆盖率足够 ({mapped_count}/{total_valid} = {coverage:.0%})，跳过AI"
+                    f"AI visual: 文字搜索覆盖率足够 ({coverage:.0%})，"
+                    f"跳过AI，使用文字搜索结果"
                 )
-
-            need_ai = ai_available and (is_garbled or coverage < 0.5)
-            if need_ai:
-                ai_mappings = self._strategy_ai_visual(paragraphs, doc, text_mappings)
-                ai_added = 0
-                for am in ai_mappings:
-                    if am.paragraph_id not in text_mappings:
-                        text_mappings[am.paragraph_id] = am
-                        ai_added += 1
-                logger.info(f"AI visual: 新增 {ai_added} 个段落坐标映射")
 
             # Step 3: Fill remaining gaps with position-based estimation
             position_mappings = self._strategy_position_based(paragraphs, doc)
@@ -288,19 +282,17 @@ class TextAnchorMapper:
         self,
         paragraphs: List[ParagraphData],
         doc: fitz.Document,
-        existing_mappings: dict,
     ) -> List[CoordinateMapping]:
         """Strategy 4: Use AI vision model to detect paragraph positions.
 
-        Sends page screenshots to a vision-capable LLM. AI outputs
-        percentage coordinates (0.0-1.0) which we convert to actual
-        page points using page dimensions.
+        Sends page screenshots to a vision LLM. AI returns percentage
+        coordinates which we convert to page points. Maps ALL valid
+        paragraphs (not just unmapped ones).
         """
         from app.render.page_cropper import PageCropper
 
         valid_paras = [p for p in paragraphs if p.full_text.strip() or p.is_image]
-        unmapped_paras = [p for p in valid_paras if p.para_index not in existing_mappings]
-        if not unmapped_paras:
+        if not valid_paras:
             return []
 
         cropper = PageCropper()
@@ -323,13 +315,11 @@ class TextAnchorMapper:
                     total_pages=total_pages,
                 )
                 for det in detections:
-                    # AI returns percentage coords; convert to page points
                     x0 = det.get("x0_pct", det.get("x0", 0.15)) * page_w
                     y0 = det.get("y0_pct", det.get("y0", 0.10)) * page_h
                     x1 = det.get("x1_pct", det.get("x1", 0.85)) * page_w
                     y1 = det.get("y1_pct", det.get("y1", 0.20)) * page_h
                     all_detected.append({
-                        "para_index": det.get("index", 0),
                         "page_num": page_num,
                         "x0": x0,
                         "y0": y0,
@@ -344,14 +334,15 @@ class TextAnchorMapper:
         if not all_detected:
             return []
 
-        # Sort detections by (page_num, y0)
+        # Sort detections globally by (page_num, y0)
         all_detected.sort(key=lambda d: (d["page_num"], d["y0"]))
 
+        # Map AI detections to ALL valid paragraphs in order
         mappings = []
         for i, det in enumerate(all_detected):
-            if i >= len(unmapped_paras):
+            if i >= len(valid_paras):
                 break
-            para = unmapped_paras[i]
+            para = valid_paras[i]
             strategy = "ai_visual_heading" if det["det_type"] == "heading" else "ai_visual"
             mappings.append(CoordinateMapping(
                 paragraph_id=para.para_index,
@@ -361,7 +352,7 @@ class TextAnchorMapper:
                 strategy=strategy,
             ))
 
-        logger.info(f"AI visual: mapped {len(mappings)} paragraphs across {total_pages} pages")
+        logger.info(f"AI visual: mapped {len(mappings)} paras across {total_pages} pages")
         return mappings
 
     def _map_single_paragraph(
