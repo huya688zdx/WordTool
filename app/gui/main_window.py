@@ -110,6 +110,7 @@ class MainWindow(QMainWindow):
 
     def _connect_signals(self):
         self.document_panel.document_selected.connect(self._on_document_selected)
+        self.document_panel.document_deleted.connect(self._on_document_deleted)
         self.pipeline_panel.status_changed.connect(self.statusbar.showMessage)
         self.paragraph_view.paragraph_selected.connect(self._on_paragraph_selected)
         self.paragraph_view.section_selected.connect(self._on_section_selected)
@@ -166,6 +167,11 @@ class MainWindow(QMainWindow):
     def _on_document_selected(self, document_id: str):
         self.statusbar.showMessage(f"Loading document {document_id}...")
         self.paragraph_view.load_paragraphs(document_id)
+
+    def _on_document_deleted(self, document_id: str):
+        # Clear paragraph view and coordinate view when the displayed document is deleted
+        self.paragraph_view.clear()
+        self.coordinate_view.clear()
 
     def _on_paragraph_selected(self, paragraph_id: str, document_id: str):
         self.coordinate_view.load_coordinates(paragraph_id, document_id)

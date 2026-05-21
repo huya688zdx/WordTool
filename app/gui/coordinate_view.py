@@ -55,6 +55,14 @@ class CoordinateView(QGroupBox):
         self.scroll.setWidget(self.image_label)
         layout.addWidget(self.scroll)
 
+    def clear(self):
+        """Clear screenshot and reset internal state."""
+        self._last_pdf_path = None
+        self._last_coord = None
+        self._last_section_bboxes = {}
+        self.coord_label.setText(I18n.tr("coord.hint"))
+        self.image_label.setText(I18n.tr("coord.no_image"))
+
     def refresh_text(self):
         self.setTitle(I18n.tr("coord.title"))
         self.coord_label.setText(I18n.tr("coord.hint"))

@@ -96,6 +96,13 @@ class ParagraphView(QGroupBox):
         self._expand_all_action.setText(I18n.tr("para.expand_all"))
         self._collapse_all_action.setText(I18n.tr("para.collapse_all"))
 
+    def clear(self):
+        """Clear the tree and reset internal state."""
+        self.tree.clear()
+        self._document_id = None
+        self._section_root = None
+        self._para_map.clear()
+
     def load_paragraphs(self, document_id: str):
         self._document_id = document_id
         self.tree.clear()

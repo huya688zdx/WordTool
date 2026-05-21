@@ -50,6 +50,7 @@ def delete_document(document_id: str) -> None:
 
 class DocumentPanel(QGroupBox):
     document_selected = Signal(str)
+    document_deleted = Signal(str)  # emitted when a document is deleted
 
     def __init__(self):
         super().__init__("")
@@ -153,6 +154,7 @@ class DocumentPanel(QGroupBox):
         try:
             delete_document(doc_id)
             self._load_documents()
+            self.document_deleted.emit(doc_id)
             QMessageBox.information(self, "", I18n.tr("doc.deleted"))
         except Exception as e:
             QMessageBox.warning(
