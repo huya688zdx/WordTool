@@ -33,11 +33,22 @@ class PageCropper:
         doc = fitz.open(str(pdf_path))
         try:
             page = doc[page_number - 1]
-            rect = fitz.Rect(bbox) + (-padding, -padding, padding, padding)
+            page_w = page.rect.width
 
-            # Ensure rect is within page bounds
+            # Expand horizontally to capture full text column width.
+            # The detected bbox may be tight around characters, but we want
+            # the full column width including whitespace on both sides.
+            h_padding = max(padding, page_w * 0.05)  # at least 5% page width
+            v_padding = padding
+
+            rect = fitz.Rect(bbox) + (
+                -h_padding, -v_padding, h_padding, v_padding
+            )
+
+            # Clamp to page bounds but prefer wider width
             page_rect = page.rect
-            rect = rect & page_rect  # Intersection
+            rect.x0 = max(page_rect.x0 + 5, rect.x0)   # leave 5pt margin from page edge
+            rect.x1 = min(page_rect.x1 - 5, rect.x1)
 
             mat = fitz.Matrix(zoom, zoom)
             pix = page.get_pixmap(clip=rect, matrix=mat)
