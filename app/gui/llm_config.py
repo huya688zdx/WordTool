@@ -3,7 +3,7 @@ import json
 
 from PySide6.QtWidgets import (
     QWidget, QHBoxLayout, QComboBox, QLineEdit, QPushButton,
-    QLabel, QGroupBox,
+    QLabel, QGroupBox, QCheckBox, QVBoxLayout,
 )
 
 from app.ai.client import LLMClient
@@ -33,46 +33,55 @@ class LLMConfigWidget(QGroupBox):
         self.load()
 
     def _setup_ui(self):
-        layout = QHBoxLayout(self)
+        main_layout = QVBoxLayout(self)
+        top_row = QHBoxLayout()
 
         self.provider_label = QLabel(I18n.tr("llm.provider"))
-        layout.addWidget(self.provider_label)
+        top_row.addWidget(self.provider_label)
 
         self.provider_combo = QComboBox()
         self.provider_combo.addItems(list(LLMClient.PROVIDER_CONFIGS.keys()) + ["Custom"])
         self.provider_combo.currentTextChanged.connect(self._on_provider_changed)
-        layout.addWidget(self.provider_combo)
+        top_row.addWidget(self.provider_combo)
 
         self.url_label = QLabel(I18n.tr("llm.base_url"))
-        layout.addWidget(self.url_label)
+        top_row.addWidget(self.url_label)
 
         self.base_url_input = QLineEdit("https://api.openai.com/v1")
         self.base_url_input.setMinimumWidth(250)
-        layout.addWidget(self.base_url_input)
+        top_row.addWidget(self.base_url_input)
 
         self.model_label = QLabel(I18n.tr("llm.model"))
-        layout.addWidget(self.model_label)
+        top_row.addWidget(self.model_label)
 
         self.model_input = QLineEdit("gpt-4o")
         self.model_input.setMinimumWidth(120)
-        layout.addWidget(self.model_input)
+        top_row.addWidget(self.model_input)
 
         self.key_label = QLabel(I18n.tr("llm.api_key"))
-        layout.addWidget(self.key_label)
+        top_row.addWidget(self.key_label)
 
         self.api_key_input = QLineEdit()
         self.api_key_input.setEchoMode(QLineEdit.Password)
         self.api_key_input.setPlaceholderText("sk-...")
         self.api_key_input.setMinimumWidth(150)
-        layout.addWidget(self.api_key_input)
+        top_row.addWidget(self.api_key_input)
 
         self.test_btn = QPushButton(I18n.tr("llm.test"))
         self.test_btn.clicked.connect(self._test_connection)
-        layout.addWidget(self.test_btn)
+        top_row.addWidget(self.test_btn)
 
         self.status_label = QLabel("")
-        layout.addWidget(self.status_label)
-        layout.addStretch()
+        top_row.addWidget(self.status_label)
+        top_row.addStretch()
+        main_layout.addLayout(top_row)
+
+        # AI visual detection toggle row
+        ai_row = QHBoxLayout()
+        self.ai_visual_check = QCheckBox(I18n.tr("llm.ai_visual"))
+        ai_row.addWidget(self.ai_visual_check)
+        ai_row.addStretch()
+        main_layout.addLayout(ai_row)
 
     def refresh_text(self):
         self.setTitle(I18n.tr("llm.title"))
@@ -82,6 +91,7 @@ class LLMConfigWidget(QGroupBox):
         self.key_label.setText(I18n.tr("llm.api_key"))
         self.api_key_input.setPlaceholderText(I18n.tr("llm.api_key_placeholder"))
         self.test_btn.setText(I18n.tr("llm.test"))
+        self.ai_visual_check.setText(I18n.tr("llm.ai_visual"))
 
     def _on_provider_changed(self, name: str):
         config = LLMClient.PROVIDER_CONFIGS.get(name)
@@ -114,6 +124,7 @@ class LLMConfigWidget(QGroupBox):
             self.base_url_input.setText(data["base_url"])
         if data.get("model"):
             self.model_input.setText(data["model"])
+        self.ai_visual_check.setChecked(data.get("ai_visual_enabled", False))
 
     def save(self):
         """Persist current config to disk."""
@@ -121,7 +132,11 @@ class LLMConfigWidget(QGroupBox):
             "api_key": self.get_api_key(),
             "base_url": self.get_base_url(),
             "model": self.get_model(),
+            "ai_visual_enabled": self.is_ai_visual_enabled(),
         })
+
+    def is_ai_visual_enabled(self) -> bool:
+        return self.ai_visual_check.isChecked()
 
     def get_api_key(self) -> str:
         return self.api_key_input.text().strip()

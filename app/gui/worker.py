@@ -200,18 +200,19 @@ class PipelineWorker(QThread):
 
         pdf_path = storage.get_path(doc.pdf_storage_key)
 
-        # Try AI visual detection if LLM config is available
+        # AI visual detection — only if user enabled it in settings
         visual_detector = None
         try:
             from app.gui.llm_config import _load_config
             llm_cfg = _load_config()
-            if llm_cfg.get("api_key") and llm_cfg.get("base_url") and llm_cfg.get("model"):
-                from app.ai.visual_detector import VisualPageDetector
-                visual_detector = VisualPageDetector(
-                    api_key=llm_cfg["api_key"],
-                    base_url=llm_cfg["base_url"],
-                    model=llm_cfg["model"],
-                )
+            if llm_cfg.get("ai_visual_enabled", False):
+                if llm_cfg.get("api_key") and llm_cfg.get("base_url") and llm_cfg.get("model"):
+                    from app.ai.visual_detector import VisualPageDetector
+                    visual_detector = VisualPageDetector(
+                        api_key=llm_cfg["api_key"],
+                        base_url=llm_cfg["base_url"],
+                        model=llm_cfg["model"],
+                    )
         except Exception:
             pass  # AI not configured — use text search + position fallback only
 
