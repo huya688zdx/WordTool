@@ -13,6 +13,12 @@ from app.utils.text_normalize import normalize_for_matching, extract_search_toke
 from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
+# Ensure console output is visible when running GUI from terminal
+if not logger.handlers and not logging.getLogger().handlers:
+    _console = logging.StreamHandler()
+    _console.setFormatter(logging.Formatter("%(levelname)s - %(name)s - %(message)s"))
+    logging.getLogger().addHandler(_console)
+    logging.getLogger().setLevel(logging.INFO)
 
 
 class TextAnchorMapper:
@@ -74,17 +80,34 @@ class TextAnchorMapper:
             # (garbled CJK PDFs) or when many paragraphs remain unmapped
             total_valid = len([p for p in paragraphs if p.full_text.strip() or p.is_image])
             mapped_count = len(text_mappings)
-            need_ai = (
-                self._visual_detector is not None and (
-                    is_garbled or
-                    mapped_count < total_valid * 0.5  # <50% text search coverage → AI
+            coverage = mapped_count / max(total_valid, 1)
+            ai_available = self._visual_detector is not None
+
+            if not ai_available:
+                logger.info("AI visual: 未配置（visual_detector=None）")
+            elif is_garbled:
+                logger.info(
+                    f"AI visual: PDF文本乱码，启用AI检测 "
+                    f"(文字搜索命中 {mapped_count}/{total_valid} = {coverage:.0%})"
                 )
-            )
+            elif coverage < 0.5:
+                logger.info(
+                    f"AI visual: 文字搜索覆盖率低 ({mapped_count}/{total_valid} = {coverage:.0%})，启用AI检测"
+                )
+            else:
+                logger.info(
+                    f"AI visual: 文字搜索覆盖率足够 ({mapped_count}/{total_valid} = {coverage:.0%})，跳过AI"
+                )
+
+            need_ai = ai_available and (is_garbled or coverage < 0.5)
             if need_ai:
                 ai_mappings = self._strategy_ai_visual(paragraphs, doc, text_mappings)
+                ai_added = 0
                 for am in ai_mappings:
                     if am.paragraph_id not in text_mappings:
                         text_mappings[am.paragraph_id] = am
+                        ai_added += 1
+                logger.info(f"AI visual: 新增 {ai_added} 个段落坐标映射")
 
             # Step 3: Fill remaining gaps with position-based estimation
             position_mappings = self._strategy_position_based(paragraphs, doc)

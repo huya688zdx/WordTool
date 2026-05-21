@@ -11,6 +11,8 @@ from app.parser.docx_parser import DocxParser
 from app.render.word_renderer import render_docx_to_pdf
 from app.render.text_anchor import map_paragraphs_to_pdf
 from app.storage.local_fs import storage
+import logging
+_log = logging.getLogger(__name__)
 
 
 class PipelineWorker(QThread):
@@ -206,16 +208,26 @@ class PipelineWorker(QThread):
         try:
             from app.gui.llm_config import _load_config
             llm_cfg = _load_config()
-            if llm_cfg.get("ai_visual_enabled", False):
-                if llm_cfg.get("api_key") and llm_cfg.get("base_url") and llm_cfg.get("model"):
-                    from app.ai.visual_detector import VisualPageDetector
-                    visual_detector = VisualPageDetector(
-                        api_key=llm_cfg["api_key"],
-                        base_url=llm_cfg["base_url"],
-                        model=llm_cfg["model"],
-                    )
-        except Exception:
-            pass  # AI not configured — use text search + position fallback only
+            if not llm_cfg.get("ai_visual_enabled", False):
+                msg = "[AI视觉] 未启用（在 Settings → LLM Config 中勾选开启）"
+            elif not llm_cfg.get("api_key"):
+                msg = "[AI视觉] 未配置 API Key，已跳过"
+            elif not llm_cfg.get("base_url"):
+                msg = "[AI视觉] 未配置 Base URL，已跳过"
+            else:
+                from app.ai.visual_detector import VisualPageDetector
+                visual_detector = VisualPageDetector(
+                    api_key=llm_cfg["api_key"],
+                    base_url=llm_cfg["base_url"],
+                    model=llm_cfg["model"],
+                )
+                msg = "[AI视觉] 已就绪，将在文字搜索失败时启用"
+            print(msg)
+            self.progress.emit(msg)
+        except Exception as e:
+            msg = f"[AI视觉] 初始化失败: {e}"
+            print(msg)
+            self.progress.emit(msg)
 
         mappings = map_paragraphs_to_pdf(
             para_data_list, str(pdf_path),
