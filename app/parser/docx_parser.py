@@ -143,12 +143,13 @@ class DocxParser:
         has_revisions = False
         is_deleted = False
 
-        # Check if entire paragraph is deleted
+        # Check if entire paragraph is deleted — skip it
         ppr = find_child(para_element, "w:pPr")
         if ppr is not None:
             rpr = find_child(ppr, "w:rPr")
             if rpr is not None and find_child(rpr, "w:del") is not None:
-                is_deleted = True
+                # Entire paragraph deleted by tracked changes — exclude from output
+                return None
 
         # Get style info
         style_name = None
@@ -183,7 +184,7 @@ class DocxParser:
                         run_index += 1
 
             elif child.tag == qn("w:del"):
-                # Deleted content (revision)
+                # Deleted content (revision) — skip from full_text to show only latest version
                 has_revisions = True
                 is_deleted = True
                 author = child.get(qn("w:author"), "")
@@ -191,7 +192,7 @@ class DocxParser:
                     run_data = self._parse_run(r, is_deleted=True, revision_author=author)
                     if run_data:
                         runs.append(run_data)
-                        full_text_parts.append(run_data.text)
+                        # Do NOT add deleted text to full_text_parts
                         if run_data.is_highlighted:
                             has_highlights = True
                         run_index += 1
