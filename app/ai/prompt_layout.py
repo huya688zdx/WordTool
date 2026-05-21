@@ -17,40 +17,41 @@ Given a screenshot of a document page, identify every distinct paragraph region.
 
 ## Output Format
 Return ONLY a JSON object (no markdown, no explanation) in this exact format:
-```json
+```
 {
   "paragraphs": [
     {
       "index": 0,
       "type": "text",
-      "x0": 72.0,
-      "y0": 100.0,
-      "x1": 523.0,
-      "y1": 180.0,
+      "x0_pct": 0.12,
+      "y0_pct": 0.15,
+      "x1_pct": 0.88,
+      "y1_pct": 0.25,
       "content_preview": "First few words..."
     }
   ]
 }
 ```
 
-Coordinates are in points (1pt = 1/72 inch), with origin (0,0) at the top-left corner of the page.
-- x0, y0: top-left corner
-- x1, y1: bottom-right corner
-- Sort paragraphs by vertical position (y0 ascending)
+**IMPORTANT — Use percentage coordinates, not points:**
+- x0_pct, x1_pct: 0.0 (left edge) to 1.0 (right edge of the PAGE)
+- y0_pct, y1_pct: 0.0 (top edge) to 1.0 (bottom edge of the PAGE)
+- Example: a paragraph centered on the page spanning middle 70% width, from 20% to 40% height → x0_pct=0.15, y0_pct=0.20, x1_pct=0.85, y1_pct=0.40
+- Sort paragraphs by y0_pct ascending
 
 ## Example
-For a page with a heading "Chapter 1" followed by two body paragraphs, the output would look like:
-```json
+For a page with a heading and two body paragraphs:
+```
 {
   "paragraphs": [
-    {"index": 0, "type": "heading", "x0": 90, "y0": 120, "x1": 510, "y1": 150, "content_preview": "Chapter 1"},
-    {"index": 1, "type": "text", "x0": 90, "y0": 170, "x1": 510, "y1": 260, "content_preview": "This is the first body..."},
-    {"index": 2, "type": "text", "x0": 90, "y0": 280, "x1": 510, "y1": 400, "content_preview": "Second paragraph here..."}
+    {"index": 0, "type": "heading", "x0_pct": 0.15, "y0_pct": 0.14, "x1_pct": 0.85, "y1_pct": 0.17, "content_preview": "Chapter 1"},
+    {"index": 1, "type": "text", "x0_pct": 0.15, "y0_pct": 0.20, "x1_pct": 0.85, "y1_pct": 0.32, "content_preview": "This is the first..."},
+    {"index": 2, "type": "text", "x0_pct": 0.15, "y0_pct": 0.35, "x1_pct": 0.85, "y1_pct": 0.50, "content_preview": "Second paragraph..."}
   ]
 }
 ```
 
-Be precise. Measure carefully. Each coordinate matters."""
+Be precise. Measure carefully. Each coordinate matters. Use percentages of the FULL page dimensions."""
 
 
 def make_layout_prompt(page_number: int, total_pages: int, doc_hint: str = "") -> str:
