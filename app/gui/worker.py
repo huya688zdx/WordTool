@@ -28,10 +28,13 @@ class PipelineWorker(QThread):
         self.password = password
 
     def run(self):
+        doc = None
+        storage_key = None
         try:
             db = get_session_factory()()
             try:
                 doc = self._create_document(db)
+                storage_key = doc.storage_key
 
                 if doc.original_format == "doc":
                     self.progress.emit("解析 .doc 结构（通过 Word COM）...")
@@ -46,11 +49,29 @@ class PipelineWorker(QThread):
                 self.progress.emit("对齐段落坐标...")
                 self._align(doc, db)
 
+                doc.status = "aligned"
+                db.commit()
+
                 self.progress.emit("完成！")
                 self.finished.emit(doc.id, {
                     "status": "aligned",
                     "document_id": doc.id,
                 })
+            except Exception:
+                # Rollback any partial DB changes and clean up storage
+                db.rollback()
+                if doc is not None:
+                    try:
+                        if doc.pdf_storage_key:
+                            storage.delete_file(doc.pdf_storage_key)
+                    except Exception:
+                        pass
+                if storage_key:
+                    try:
+                        storage.delete_file(storage_key)
+                    except Exception:
+                        pass
+                raise
             finally:
                 db.close()
         except Exception as e:
@@ -71,13 +92,12 @@ class PipelineWorker(QThread):
             status="uploaded",
         )
         db.add(doc)
-        db.commit()
-        db.refresh(doc)
+        db.flush()  # flush to get ID, but don't commit yet
         return doc
 
     def _parse_docx(self, doc, db):
         doc.status = "parsing"
-        db.commit()
+        db.flush()
 
         parser = DocxParser()
         structure = parser.parse(storage.get_path(doc.storage_key))
@@ -115,12 +135,12 @@ class PipelineWorker(QThread):
                 db.add(run)
 
         doc.status = "parsed"
-        db.commit()
+        db.flush()
 
     def _parse_doc_via_com(self, doc, db):
         """Parse .doc file by extracting text via Word COM (no python-docx support)."""
         doc.status = "parsing"
-        db.commit()
+        db.flush()
 
         from app.parser.doc_parser import parse_doc_via_com
         docx_path = storage.get_path(doc.storage_key)
@@ -158,11 +178,11 @@ class PipelineWorker(QThread):
                 db.add(run)
 
         doc.status = "parsed"
-        db.commit()
+        db.flush()
 
     def _render(self, doc, db):
         doc.status = "rendering"
-        db.commit()
+        db.flush()
 
         from app.config.settings import settings
         from uuid import uuid4
@@ -187,11 +207,11 @@ class PipelineWorker(QThread):
         # Store Word COM positions for use in alignment
         self._word_positions = positions
         doc.status = "rendered"
-        db.commit()
+        db.flush()
 
     def _align(self, doc, db):
         doc.status = "aligning"
-        db.commit()
+        db.flush()
 
         paragraphs = db.query(Paragraph).filter(
             Paragraph.document_id == doc.id
@@ -288,4 +308,4 @@ class PipelineWorker(QThread):
                     db.add(coord)
 
         doc.status = "aligned"
-        db.commit()
+        db.flush()
