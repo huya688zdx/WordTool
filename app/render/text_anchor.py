@@ -56,16 +56,17 @@ class TextAnchorMapper:
             self._cursor_page = 1
             self._cursor_y = 0.0
 
-            # Step 1: Try text search first
+            # Step 1: Try text search first (skip if PDF text is garbled)
             text_mappings = {}
-            for para in paragraphs:
-                if not para.full_text.strip():
-                    continue
-                mapping = self._map_single_paragraph(para, doc, page_words)
-                if mapping:
-                    text_mappings[para.para_index] = mapping
-                    self._cursor_page = mapping.page_number
-                    self._cursor_y = mapping.bbox[3]
+            if not is_garbled:
+                for para in paragraphs:
+                    if not para.full_text.strip():
+                        continue
+                    mapping = self._map_single_paragraph(para, doc, page_words)
+                    if mapping:
+                        text_mappings[para.para_index] = mapping
+                        self._cursor_page = mapping.page_number
+                        self._cursor_y = mapping.bbox[3]
 
             # Step 2: Fill unmapped paragraphs with position-based estimation
             position_mappings = self._strategy_position_based(paragraphs, doc)
@@ -127,15 +128,19 @@ class TextAnchorMapper:
             pages_blocks[page_index + 1] = page_list
 
         # 2. Expand each block's bbox downward to capture nearby lines
-        # Same paragraph lines have very small gaps (< 5pt) in dense CJK docs
+        # Same paragraph lines have very small gaps (< 5pt) in dense CJK docs.
+        # When blocks[j] is merged into blocks[i], we must remove it so the
+        # 1-to-1 sequential mapping doesn't shift — otherwise consumed blocks
+        # remain as separate entries and later paragraphs get wrong bboxes.
         for page_num in pages_blocks:
             blocks = pages_blocks[page_num]
-            for i in range(len(blocks)):
-                # Look ahead for blocks very close below
-                for j in range(i + 1, len(blocks)):
+            i = 0
+            while i < len(blocks):
+                j = i + 1
+                while j < len(blocks):
                     gap = blocks[j][1] - blocks[i][3]
                     if gap < 5:  # nearly touching = same paragraph
-                        # Expand current bbox
+                        # Expand current bbox to include blocks[j]
                         blocks[i] = (
                             min(blocks[i][0], blocks[j][0]),
                             blocks[i][1],
@@ -143,8 +148,11 @@ class TextAnchorMapper:
                             blocks[j][3],
                             blocks[i][4],
                         )
+                        blocks.pop(j)
+                        # don't increment j — check next block
                     else:
                         break
+                i += 1
 
         # Flatten to single list, keeping page order
         all_blocks = []
@@ -260,8 +268,15 @@ class TextAnchorMapper:
                     continue
                 rects = page.search_for(chunk)
                 if rects:
-                    page_rects.extend(rects)
-                    page_matched += 1
+                    # Filter rects below cursor on the current page
+                    valid = []
+                    for r in rects:
+                        if page_num == self._cursor_page and r.y0 < self._cursor_y:
+                            continue
+                        valid.append(r)
+                    if valid:
+                        page_rects.extend(valid)
+                        page_matched += 1
 
             if page_matched > matched_chunks:
                 matched_chunks = page_matched
