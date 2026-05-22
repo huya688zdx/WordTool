@@ -82,27 +82,16 @@ class TextAnchorMapper:
             coverage = mapped_count / max(total_valid, 1)
             ai_available = self._visual_detector is not None
 
-            # Step 2: AI visual detection — PRIMARY strategy when enabled and needed.
-            # When AI is enabled and text quality is poor, AI REPLACES all mappings
-            # (not just fills gaps). Previous text search results are discarded.
-            if ai_available and (is_garbled or coverage < 0.5):
-                logger.info(
-                    f"AI visual: PDF文本乱码={is_garbled} 文字搜索覆盖={coverage:.0%}，"
-                    f"AI 作为主力策略，替换全部 {mapped_count} 个文本搜索结果"
-                )
+            # Step 2: AI visual detection — always use when enabled
+            if ai_available:
+                logger.info("AI visual: 已启用，直接发送页面截图给 AI 检测段落位置")
                 ai_mappings = self._strategy_ai_visual(paragraphs, doc)
-                # AI replaces text search — start fresh
                 text_mappings = {}
                 for am in ai_mappings:
                     text_mappings[am.paragraph_id] = am
                 logger.info(f"AI visual: 共映射 {len(ai_mappings)} 个段落")
-            elif not ai_available:
-                logger.info("AI visual: 未配置（visual_detector=None），使用文字搜索+位置兜底")
             else:
-                logger.info(
-                    f"AI visual: 文字搜索覆盖率足够 ({coverage:.0%})，"
-                    f"跳过AI，使用文字搜索结果"
-                )
+                logger.info("AI visual: 未配置（visual_detector=None），使用文字搜索+位置兜底")
 
             # Step 3: Fill remaining gaps with position-based estimation
             position_mappings = self._strategy_position_based(paragraphs, doc)

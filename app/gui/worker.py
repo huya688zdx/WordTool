@@ -296,56 +296,36 @@ class PipelineWorker(QThread):
 
         pdf_path = storage.get_path(doc.pdf_storage_key)
 
-        # Use Word COM paragraph positions if available (100% accurate, no heuristics)
-        word_positions = getattr(self, "_word_positions", None)
-        if word_positions:
-            print(f"[对齐] 使用 Word COM 提取的 {len(word_positions)} 个段落精确坐标")
-            self.progress.emit(f"对齐: 使用 Word COM 精确坐标 ({len(word_positions)} 段落)")
-            # Map Word COM positions directly to paragraphs by para_index
-            for wp in word_positions:
-                pi = wp.get("para_index", 0)
-                para = next((p for p in paragraphs if p.para_index == pi), None)
-                if para:
-                    coord = PDFCoordinate(
-                        document_id=doc.id,
-                        paragraph_id=para.id,
-                        page_number=wp["page"],
-                        bbox_x0=wp["x0"],
-                        bbox_y0=wp["y0"],
-                        bbox_x1=wp["x1"],
-                        bbox_y1=wp["y1"],
-                        match_confidence=1.0,
-                        match_strategy="word_com",
-                    )
-                    db.add(coord)
-        else:
-            # Fallback: AI visual detection + text anchor position mapping
-            visual_detector = None
-            try:
-                from app.gui.llm_config import _load_config
-                llm_cfg = _load_config()
-                if not llm_cfg.get("ai_visual_enabled", False):
-                    msg = "[AI视觉] 未启用（在 Settings → LLM Config 中勾选开启）"
-                elif not llm_cfg.get("api_key"):
-                    msg = "[AI视觉] 未配置 API Key，已跳过"
-                elif not llm_cfg.get("base_url"):
-                    msg = "[AI视觉] 未配置 Base URL，已跳过"
-                else:
-                    from app.ai.visual_detector import VisualPageDetector
-                    visual_detector = VisualPageDetector(
-                        api_key=llm_cfg["api_key"],
-                        base_url=llm_cfg["base_url"],
-                        model=llm_cfg["model"],
-                    )
-                    msg = "[AI视觉] 已就绪，将在文字搜索失败时启用"
-                print(msg)
-                self.progress.emit(msg)
-            except Exception as e:
-                msg = f"[AI视觉] 初始化失败: {e}"
-                print(msg)
-                self.progress.emit(msg)
+        # Check if AI visual detection is enabled
+        visual_detector = None
+        ai_visual_enabled = False
+        try:
+            from app.gui.llm_config import _load_config
+            llm_cfg = _load_config()
+            if not llm_cfg.get("ai_visual_enabled", False):
+                msg = "[AI视觉] 未启用（在 Settings → LLM Config 中勾选开启）"
+            elif not llm_cfg.get("api_key"):
+                msg = "[AI视觉] 未配置 API Key，已跳过"
+            elif not llm_cfg.get("base_url"):
+                msg = "[AI视觉] 未配置 Base URL，已跳过"
+            else:
+                from app.ai.visual_detector import VisualPageDetector
+                visual_detector = VisualPageDetector(
+                    api_key=llm_cfg["api_key"],
+                    base_url=llm_cfg["base_url"],
+                    model=llm_cfg["model"],
+                )
+                ai_visual_enabled = True
+                msg = "[AI视觉] 已就绪，直接发送页面截图给 AI"
+            print(msg)
+            self.progress.emit(msg)
+        except Exception as e:
+            msg = f"[AI视觉] 初始化失败: {e}"
+            print(msg)
+            self.progress.emit(msg)
 
-            pdf_path = storage.get_path(doc.pdf_storage_key)
+        if ai_visual_enabled:
+            # AI visual detection — send page images to AI
             mappings = map_paragraphs_to_pdf(
                 para_data_list, str(pdf_path),
                 visual_detector=visual_detector,
@@ -368,6 +348,51 @@ class PipelineWorker(QThread):
                         match_strategy=mapping.strategy,
                     )
                     db.add(coord)
+        else:
+            # Use Word COM positions if available, otherwise text search fallback
+            word_positions = getattr(self, "_word_positions", None)
+            if word_positions:
+                print(f"[对齐] 使用 Word COM 提取的 {len(word_positions)} 个段落精确坐标")
+                self.progress.emit(f"对齐: 使用 Word COM 精确坐标 ({len(word_positions)} 段落)")
+                for wp in word_positions:
+                    pi = wp.get("para_index", 0)
+                    para = next((p for p in paragraphs if p.para_index == pi), None)
+                    if para:
+                        coord = PDFCoordinate(
+                            document_id=doc.id,
+                            paragraph_id=para.id,
+                            page_number=wp["page"],
+                            bbox_x0=wp["x0"],
+                            bbox_y0=wp["y0"],
+                            bbox_x1=wp["x1"],
+                            bbox_y1=wp["y1"],
+                            match_confidence=1.0,
+                            match_strategy="word_com",
+                        )
+                        db.add(coord)
+            else:
+                mappings = map_paragraphs_to_pdf(
+                    para_data_list, str(pdf_path),
+                    visual_detector=None,
+                )
+                for mapping in mappings:
+                    para = next(
+                        (p for p in paragraphs if p.para_index == mapping.paragraph_id),
+                        None
+                    )
+                    if para:
+                        coord = PDFCoordinate(
+                            document_id=doc.id,
+                            paragraph_id=para.id,
+                            page_number=mapping.page_number,
+                            bbox_x0=mapping.bbox[0],
+                            bbox_y0=mapping.bbox[1],
+                            bbox_x1=mapping.bbox[2],
+                            bbox_y1=mapping.bbox[3],
+                            match_confidence=mapping.confidence,
+                            match_strategy=mapping.strategy,
+                        )
+                        db.add(coord)
 
         doc.status = "aligned"
         db.flush()
