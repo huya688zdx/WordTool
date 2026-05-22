@@ -1,98 +1,75 @@
-"""Prompt template for AI-assisted page layout verification."""
+"""Prompt template for AI visual heading level verification."""
 
 from __future__ import annotations
 
-SYSTEM_PROMPT_LAYOUT = """You are a document layout verification expert. Your task is to verify and correct paragraph bounding boxes on a document page image.
+SYSTEM_PROMPT_VISUAL_HEADING = """You are a document structure analyst with vision capability. You will receive a page screenshot AND the text content of every paragraph on that page, along with Word COM's pre-assigned heading levels.
 
-## Your Task
-You will receive:
-1. A screenshot of a document page
-2. A list of pre-detected paragraphs with their bounding boxes and text content (from Word COM)
+## Your ONLY Task
+For each paragraph on this page, check whether its heading_level is CORRECT.
+- Word COM often assigns WRONG levels (e.g., H10 for a chapter title that should be H1)
+- Use the VISUAL layout (font size, boldness, position on page) AND text content to judge
+- Only flag paragraphs whose level is WRONG — do not include correct ones
 
-For each paragraph, compare its bounding box against the actual text visible in the image. If the box correctly bounds the text, keep it. If it's shifted, too small, too large, or wrong in any way — CORRECT IT.
-
-## Critical Rules
-1. **FULL text width**: The bbox must include the ENTIRE horizontal span of text — do NOT cut off text on left or right.
-2. **FULL paragraph height**: Include ALL lines belonging to the same paragraph.
-3. **Exclude headers and footers**: Skip page numbers, headers, footers.
-4. **Image/diagram regions**: Mark as type "image".
-5. **Keep existing paragraphs that look correct** — only fix the ones with visible errors.
-6. **If a pre-detected paragraph's text doesn't match what you see** in the image, adjust the bbox to match the actual visible text.
+## What to Check
+1. **Visual cues**: Large/bold text at page top → likely H1; indented smaller text → H2/H3
+2. **Text patterns**: "第X章", "一、", "X.X" → heading; check level matches pattern
+3. **Body text**: Long paragraphs of normal-sized text → should be Lv=0 (not a heading)
+4. **Wrong levels**: H10 where H1 belongs, H5 where H2 belongs, · where a heading should be
 
 ## Output Format
 Return ONLY a JSON object:
 ```
-{
-  "paragraphs": [
-    {
-      "index": 0,
-      "type": "text",
-      "x0_pct": 0.12,
-      "y0_pct": 0.15,
-      "x1_pct": 0.88,
-      "y1_pct": 0.25,
-      "content_preview": "First few words...",
-      "corrected": false,
-      "correction_note": ""
-    }
-  ]
-}
+{"corrections": [
+  {"index": 5, "heading_level": 1, "reason": "H10→H1: 章标题，大号加粗居页面顶部"},
+  {"index": 12, "heading_level": 2, "reason": "·→H2: 2.1 系统架构，COM遗漏"}
+]}
 ```
 
-- x0_pct, x1_pct: 0.0 (left) to 1.0 (right of PAGE)
-- y0_pct, y1_pct: 0.0 (top) to 1.0 (bottom of PAGE)
-- "corrected": true if you changed the bbox, false if the original was correct
-- "correction_note": brief explanation if corrected, empty string if not
-- Sort by y0_pct ascending
-- Include EVERY paragraph from the input list — do not drop any"""
+- "index": paragraph index from the input
+- "heading_level": the CORRECT level (0 = normal body text)
+- "reason": explain what was wrong and why you changed it
+
+Include ONLY paragraphs whose heading_level needs correction.
+Return {"corrections": []} if all levels are correct.
+
+IMPORTANT: Do NOT return coordinates or bounding boxes. Only return heading level corrections."""
 
 
-def make_layout_prompt(
+def make_visual_heading_prompt(
     page_number: int,
     total_pages: int,
-    doc_hint: str = "",
-    existing_paragraphs: list[dict] | None = None,
+    existing_paragraphs: list[dict],
 ) -> str:
-    """Build the user prompt for layout verification.
+    """Build the user prompt for visual heading verification.
 
     Args:
         page_number: Current page number (1-based)
         total_pages: Total pages in document
-        doc_hint: Optional hint about document content
-        existing_paragraphs: List of pre-detected paragraphs from Word COM.
-            Each dict: index, text, x0_pct, y0_pct, x1_pct, y1_pct, heading_level
+        existing_paragraphs: List of paragraphs on this page.
+            Each dict: index, text, heading_level
     """
-    hint = ""
-    if doc_hint:
-        hint = f"\nDocument type hint: {doc_hint}"
+    lines = []
+    for p in existing_paragraphs:
+        idx = p.get("index", "?")
+        text = (p.get("text") or "").strip()
+        lv = p.get("heading_level") or 0
+        level_tag = f"H{lv}" if lv else "·"
+        lines.append(f"[{idx}] {level_tag} | {text}")
 
-    para_list = ""
-    if existing_paragraphs:
-        lines = []
-        for p in existing_paragraphs:
-            idx = p.get("index", "?")
-            text = (p.get("text") or "").strip()[:80]
-            lv = p.get("heading_level") or 0
-            level_tag = f"H{lv}" if lv else "·"
-            lines.append(
-                f"  [{idx}] {level_tag} "
-                f"x0={p.get('x0_pct', 0):.3f} y0={p.get('y0_pct', 0):.3f} "
-                f"x1={p.get('x1_pct', 0):.3f} y1={p.get('y1_pct', 0):.3f} "
-                f"| {text}"
-            )
-        para_list = "\n".join(lines)
+    para_list = "\n".join(lines)
 
-    return f"""Verify and correct the paragraph bounding boxes on this page.
+    return f"""Verify heading levels for every paragraph on this page.
 
-Page: {page_number} / {total_pages}{hint}
+Page: {page_number} / {total_pages}
 
-## Pre-detected paragraphs (Word COM) — verify against the image:
+Look at the page image AND read the text below. For each paragraph, check if its heading_level is correct.
+
+## Paragraphs on this page (with Word COM levels):
 
 {para_list}
 
-For each paragraph above:
-- Check if the bbox correctly covers the visible text in the image
-- If correct → keep as-is, set corrected=false
-- If wrong → fix the coordinates, set corrected=true, add a short note
-
-Return ONLY the JSON output. Include ALL paragraphs from the list above."""
+## Instructions
+1. Look at the image: which paragraphs are visually prominent (large font, bold, at page top)?
+2. Read the text: which paragraphs are chapter/section titles vs. body text?
+3. Flag EVERY paragraph whose heading_level is WRONG
+4. Return ONLY a JSON corrections list — no coordinates, no bounding boxes"""

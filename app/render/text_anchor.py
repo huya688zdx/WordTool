@@ -38,16 +38,12 @@ class TextAnchorMapper:
         self,
         min_confidence: Optional[float] = None,
         chunk_size: Optional[int] = None,
-        visual_detector=None,
-        word_positions: list[dict] | None = None,
     ):
         self._min_confidence = min_confidence or settings.TEXT_ANCHOR_MIN_CONFIDENCE
         self._chunk_size = chunk_size or settings.TEXT_ANCHOR_CHUNK_SIZE
         self._pdf_parser = PDFParser()
         self._cursor_page = 0
         self._cursor_y = 0.0
-        self._visual_detector = visual_detector
-        self._word_positions = word_positions
 
     def map_paragraphs(
         self,
@@ -81,23 +77,7 @@ class TextAnchorMapper:
                         self._cursor_page = mapping.page_number
                         self._cursor_y = mapping.bbox[3]
 
-            total_valid = len([p for p in paragraphs if p.full_text.strip() or p.is_image])
-            mapped_count = len(text_mappings)
-            coverage = mapped_count / max(total_valid, 1)
-            ai_available = self._visual_detector is not None
-
-            # Step 2: AI visual detection — always use when enabled
-            if ai_available:
-                logger.info("AI visual: 已启用，直接发送页面截图给 AI 检测段落位置")
-                ai_mappings = self._strategy_ai_visual(paragraphs, doc)
-                text_mappings = {}
-                for am in ai_mappings:
-                    text_mappings[am.paragraph_id] = am
-                logger.info(f"AI visual: 共映射 {len(ai_mappings)} 个段落")
-            else:
-                logger.info("AI visual: 未配置（visual_detector=None），使用文字搜索+位置兜底")
-
-            # Step 3: Fill remaining gaps with position-based estimation
+            # Step 2: Fill remaining gaps with position-based estimation
             position_mappings = self._strategy_position_based(paragraphs, doc)
             for pm in position_mappings:
                 if pm.paragraph_id not in text_mappings:
@@ -269,134 +249,6 @@ class TextAnchorMapper:
                 ))
                 para_idx += 1
 
-        return mappings
-
-    def _strategy_ai_visual(
-        self,
-        paragraphs: List[ParagraphData],
-        doc: fitz.Document,
-    ) -> List[CoordinateMapping]:
-        """AI visual verification: send page image + Word COM positions + text.
-
-        AI verifies each pre-detected bbox against the visible image,
-        correcting offsets where Word COM got it wrong.
-        """
-        from app.render.page_cropper import PageCropper
-
-        valid_paras = [p for p in paragraphs if p.full_text.strip() or p.is_image]
-        if not valid_paras:
-            return []
-
-        # Build lookup: para_index → paragraph data and Word COM position
-        wp_map = {}
-        if self._word_positions:
-            for wp in self._word_positions:
-                wp_map[wp.get("para_index", 0)] = wp
-
-        cropper = PageCropper()
-        total_pages = len(doc)
-        all_corrected = []
-
-        for page_index in range(total_pages):
-            page_num = page_index + 1
-            try:
-                page = doc[page_index]
-                page_w = page.rect.width
-                page_h = page.rect.height
-
-                # Build existing_paragraphs for this page — Word COM positions
-                # converted to percentage coordinates that the AI works with
-                page_existing = []
-                for para in valid_paras:
-                    wp = wp_map.get(para.para_index)
-                    if wp and wp.get("page") == page_num:
-                        page_existing.append({
-                            "index": para.para_index,
-                            "text": para.full_text,
-                            "heading_level": para.heading_level or 0,
-                            "x0_pct": wp["x0"] / page_w,
-                            "y0_pct": wp["y0"] / page_h,
-                            "x1_pct": wp["x1"] / page_w,
-                            "y1_pct": wp["y1"] / page_h,
-                        })
-
-                if not page_existing:
-                    continue  # no Word COM paragraphs on this page
-
-                image_bytes = cropper.get_page_thumbnail(
-                    Path(doc.name), page_num, max_width=1200,
-                )
-
-                logger.info(
-                    "AI visual page %d: sending %d pre-detected paragraphs for verification",
-                    page_num, len(page_existing),
-                )
-
-                detections = self._visual_detector.detect(
-                    image_bytes,
-                    page_number=page_num,
-                    total_pages=total_pages,
-                    existing_paragraphs=page_existing,
-                )
-
-                for det in detections:
-                    x0 = det.get("x0_pct", 0) * page_w
-                    y0 = det.get("y0_pct", 0) * page_h
-                    x1 = det.get("x1_pct", 0) * page_w
-                    y1 = det.get("y1_pct", 0) * page_h
-                    corrected = det.get("corrected", False)
-                    note = det.get("correction_note", "")
-                    all_corrected.append({
-                        "page_num": page_num,
-                        "x0": x0,
-                        "y0": y0,
-                        "x1": x1,
-                        "y1": y1,
-                        "det_type": det.get("type", "text"),
-                        "para_index": det.get("index"),
-                        "corrected": corrected,
-                        "correction_note": note,
-                    })
-
-                if corrected_list := [d for d in detections if d.get("corrected")]:
-                    logger.info(
-                        "AI visual page %d: corrected %d/%d paragraphs",
-                        page_num, len(corrected_list), len(detections),
-                    )
-                    for d in corrected_list:
-                        logger.debug("  [%d] %s", d.get("index"), d.get("correction_note", ""))
-
-            except Exception as e:
-                logger.warning(f"AI visual verification failed for page {page_num}: {e}")
-                continue
-
-        if not all_corrected:
-            return []
-
-        # Build mappings from AI-verified/corrected positions
-        # Map by para_index (AI preserves the index from input)
-        para_lookup = {p.para_index: p for p in valid_paras}
-        mappings = []
-        for det in all_corrected:
-            pi = det.get("para_index")
-            if pi is not None and pi in para_lookup:
-                strategy = "ai_visual_verified"
-                if det.get("corrected"):
-                    strategy = "ai_visual_corrected"
-                mappings.append(CoordinateMapping(
-                    paragraph_id=pi,
-                    page_number=det["page_num"],
-                    bbox=(det["x0"], det["y0"], det["x1"], det["y1"]),
-                    confidence=0.9 if det.get("corrected") else 1.0,
-                    strategy=strategy,
-                ))
-
-        logger.info(
-            "AI visual: verified %d paras, corrected %d across %d pages",
-            len(mappings),
-            sum(1 for m in mappings if m.strategy == "ai_visual_corrected"),
-            total_pages,
-        )
         return mappings
 
     def _map_single_paragraph(
@@ -596,11 +448,6 @@ class TextAnchorMapper:
 def map_paragraphs_to_pdf(
     paragraphs: List[ParagraphData],
     pdf_path: str,
-    visual_detector=None,
-    word_positions: list[dict] | None = None,
 ) -> List[CoordinateMapping]:
-    mapper = TextAnchorMapper(
-        visual_detector=visual_detector,
-        word_positions=word_positions,
-    )
+    mapper = TextAnchorMapper()
     return mapper.map_paragraphs(paragraphs, pdf_path)

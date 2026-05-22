@@ -187,7 +187,7 @@ class PipelineWorker(QThread):
         db.flush()
 
     def _ai_heading_check(self, doc, db):
-        """Run AI heading detection to find missed headings."""
+        """Run AI heading detection — text-only or visual depending on settings."""
         llm_cfg = {}
         try:
             from app.gui.llm_config import _load_config
@@ -218,8 +218,20 @@ class PipelineWorker(QThread):
             for p in paragraphs
         ]
 
-        self.progress.emit("AI 检查标题层级...")
         word_positions = getattr(self, "_word_positions", None)
+
+        # Check if visual heading verification is enabled
+        use_visual = llm_cfg.get("ai_visual_enabled", False)
+
+        self.progress.emit("AI 检查标题层级...")
+
+        if use_visual:
+            self._ai_heading_check_visual(doc, paragraphs, para_list, word_positions, llm_cfg, db)
+        else:
+            self._ai_heading_check_text(para_list, word_positions, llm_cfg, paragraphs, db)
+
+    def _ai_heading_check_text(self, para_list, word_positions, llm_cfg, paragraphs, db):
+        """Text-only heading detection (no page images)."""
         if word_positions:
             print(f"[AI标题] 发送 {len(para_list)} 个段落 + {len(word_positions)} 个坐标分析层级结构...")
         else:
@@ -231,21 +243,88 @@ class PipelineWorker(QThread):
                 para_list,
                 positions=word_positions,
             )
-            if corrections:
-                print(f"[AI标题] 发现 {len(corrections)} 个层级修正:")
-                for c in corrections:
-                    idx = c.get("index", 0)
-                    level = c.get("heading_level", 1)
-                    reason = c.get("reason", "")
-                    print(f"  段落[{idx}] → Heading {level}: {reason}")
-                    p = next((x for x in paragraphs if x.para_index == idx), None)
-                    if p:
-                        p.heading_level = level
-                db.flush()
-            else:
-                print("[AI标题] AI 认为层级无需修正")
+            self._apply_heading_corrections(corrections, paragraphs, db)
         except Exception as e:
             print(f"[AI标题] 检测失败: {e}")
+
+    def _ai_heading_check_visual(self, doc, paragraphs, para_list, word_positions, llm_cfg, db):
+        """Visual heading verification — send page screenshots + text to AI."""
+        from app.ai.visual_detector import VisualPageDetector
+        from app.render.page_cropper import PageCropper
+        import fitz
+
+        detector = VisualPageDetector(
+            api_key=llm_cfg["api_key"],
+            base_url=llm_cfg["base_url"],
+            model=llm_cfg["model"],
+        )
+
+        # Build page→paragraphs mapping from Word COM positions
+        page_paras = {}  # page_num → [(para_index, text, heading_level)]
+        if word_positions:
+            wp_map = {wp["para_index"]: wp["page"] for wp in word_positions}
+            for p in paragraphs:
+                page = wp_map.get(p.para_index, 1)
+                page_paras.setdefault(page, []).append({
+                    "index": p.para_index,
+                    "text": p.full_text,
+                    "heading_level": p.heading_level or 0,
+                })
+        else:
+            # No Word COM positions — put all paragraphs on page 1
+            page_paras[1] = [
+                {"index": p.para_index, "text": p.full_text, "heading_level": p.heading_level or 0}
+                for p in paragraphs
+            ]
+
+        pdf_path = storage.get_path(doc.pdf_storage_key)
+        cropper = PageCropper()
+        pdf_doc = fitz.open(str(pdf_path))
+        total_pages = len(pdf_doc)
+
+        all_corrections = []
+        for page_num in sorted(page_paras.keys()):
+            try:
+                image_bytes = cropper.get_page_thumbnail(
+                    Path(pdf_path), page_num, max_width=1200,
+                )
+                print(f"[AI标题-视觉] 发送第 {page_num}/{total_pages} 页，{len(page_paras[page_num])} 个段落")
+                self.progress.emit(f"AI 视觉验证标题层级 (第 {page_num}/{total_pages} 页)...")
+
+                corrections = detector.verify_headings(
+                    image_bytes,
+                    page_number=page_num,
+                    total_pages=total_pages,
+                    paragraphs=page_paras[page_num],
+                )
+                all_corrections.extend(corrections)
+            except Exception as e:
+                print(f"[AI标题-视觉] 第 {page_num} 页失败: {e}")
+                continue
+
+        pdf_doc.close()
+
+        if all_corrections:
+            print(f"[AI标题-视觉] 共 {len(all_corrections)} 个层级修正")
+            self._apply_heading_corrections(all_corrections, paragraphs, db)
+        else:
+            print("[AI标题-视觉] AI 认为层级无需修正")
+
+    def _apply_heading_corrections(self, corrections, paragraphs, db):
+        """Apply heading level corrections from AI to DB session."""
+        if not corrections:
+            print("[AI标题] AI 认为层级无需修正")
+            return
+        print(f"[AI标题] 发现 {len(corrections)} 个层级修正:")
+        for c in corrections:
+            idx = c.get("index", 0)
+            level = c.get("heading_level", 1)
+            reason = c.get("reason", "")
+            print(f"  段落[{idx}] → Heading {level}: {reason}")
+            p = next((x for x in paragraphs if x.para_index == idx), None)
+            if p:
+                p.heading_level = level
+        db.flush()
 
     def _render(self, doc, db):
         doc.status = "rendering"
@@ -284,60 +363,47 @@ class PipelineWorker(QThread):
             Paragraph.document_id == doc.id
         ).order_by(Paragraph.para_index).all()
 
-        from app.parser.docx_parser import ParagraphData
-        para_data_list = []
-        for p in paragraphs:
-            pd = ParagraphData(
-                para_index=p.para_index,
-                full_text=p.full_text,
-                style_name=p.style_name,
-                heading_level=p.heading_level,
-                has_highlights=p.has_highlights,
-                has_revisions=p.has_revisions,
-                is_deleted=p.is_deleted,
-                is_image=p.is_image,
-            )
-            para_data_list.append(pd)
-
-        pdf_path = storage.get_path(doc.pdf_storage_key)
-
-        # Check if AI visual detection is enabled
-        visual_detector = None
-        ai_visual_enabled = False
-        try:
-            from app.gui.llm_config import _load_config
-            llm_cfg = _load_config()
-            if not llm_cfg.get("ai_visual_enabled", False):
-                msg = "[AI视觉] 未启用（在 Settings → LLM Config 中勾选开启）"
-            elif not llm_cfg.get("api_key"):
-                msg = "[AI视觉] 未配置 API Key，已跳过"
-            elif not llm_cfg.get("base_url"):
-                msg = "[AI视觉] 未配置 Base URL，已跳过"
-            else:
-                from app.ai.visual_detector import VisualPageDetector
-                visual_detector = VisualPageDetector(
-                    api_key=llm_cfg["api_key"],
-                    base_url=llm_cfg["base_url"],
-                    model=llm_cfg["model"],
-                )
-                ai_visual_enabled = True
-                msg = "[AI视觉] 已就绪，直接发送页面截图给 AI"
-            print(msg)
-            self.progress.emit(msg)
-        except Exception as e:
-            msg = f"[AI视觉] 初始化失败: {e}"
-            print(msg)
-            self.progress.emit(msg)
-
         word_positions = getattr(self, "_word_positions", None)
 
-        if ai_visual_enabled:
-            # AI visual verification — send page images + Word COM positions + text to AI
-            mappings = map_paragraphs_to_pdf(
-                para_data_list, str(pdf_path),
-                visual_detector=visual_detector,
-                word_positions=word_positions,
-            )
+        if word_positions:
+            # Word COM positions are the most accurate — always use them
+            print(f"[对齐] 使用 Word COM 提取的 {len(word_positions)} 个段落精确坐标")
+            self.progress.emit(f"对齐: 使用 Word COM 精确坐标 ({len(word_positions)} 段落)")
+            for wp in word_positions:
+                pi = wp.get("para_index", 0)
+                para = next((p for p in paragraphs if p.para_index == pi), None)
+                if para:
+                    coord = PDFCoordinate(
+                        document_id=doc.id,
+                        paragraph_id=para.id,
+                        page_number=wp["page"],
+                        bbox_x0=wp["x0"],
+                        bbox_y0=wp["y0"],
+                        bbox_x1=wp["x1"],
+                        bbox_y1=wp["y1"],
+                        match_confidence=1.0,
+                        match_strategy="word_com",
+                    )
+                    db.add(coord)
+        else:
+            # Fallback: text search + position estimation
+            from app.parser.docx_parser import ParagraphData
+            para_data_list = []
+            for p in paragraphs:
+                pd = ParagraphData(
+                    para_index=p.para_index,
+                    full_text=p.full_text,
+                    style_name=p.style_name,
+                    heading_level=p.heading_level,
+                    has_highlights=p.has_highlights,
+                    has_revisions=p.has_revisions,
+                    is_deleted=p.is_deleted,
+                    is_image=p.is_image,
+                )
+                para_data_list.append(pd)
+
+            pdf_path = storage.get_path(doc.pdf_storage_key)
+            mappings = map_paragraphs_to_pdf(para_data_list, str(pdf_path))
             for mapping in mappings:
                 para = next(
                     (p for p in paragraphs if p.para_index == mapping.paragraph_id),
@@ -356,51 +422,6 @@ class PipelineWorker(QThread):
                         match_strategy=mapping.strategy,
                     )
                     db.add(coord)
-        else:
-            # Use Word COM positions if available, otherwise text search fallback
-            if word_positions:
-                print(f"[对齐] 使用 Word COM 提取的 {len(word_positions)} 个段落精确坐标")
-                self.progress.emit(f"对齐: 使用 Word COM 精确坐标 ({len(word_positions)} 段落)")
-                for wp in word_positions:
-                    pi = wp.get("para_index", 0)
-                    para = next((p for p in paragraphs if p.para_index == pi), None)
-                    if para:
-                        coord = PDFCoordinate(
-                            document_id=doc.id,
-                            paragraph_id=para.id,
-                            page_number=wp["page"],
-                            bbox_x0=wp["x0"],
-                            bbox_y0=wp["y0"],
-                            bbox_x1=wp["x1"],
-                            bbox_y1=wp["y1"],
-                            match_confidence=1.0,
-                            match_strategy="word_com",
-                        )
-                        db.add(coord)
-            else:
-                mappings = map_paragraphs_to_pdf(
-                    para_data_list, str(pdf_path),
-                    visual_detector=None,
-                    word_positions=word_positions,
-                )
-                for mapping in mappings:
-                    para = next(
-                        (p for p in paragraphs if p.para_index == mapping.paragraph_id),
-                        None
-                    )
-                    if para:
-                        coord = PDFCoordinate(
-                            document_id=doc.id,
-                            paragraph_id=para.id,
-                            page_number=mapping.page_number,
-                            bbox_x0=mapping.bbox[0],
-                            bbox_y0=mapping.bbox[1],
-                            bbox_x1=mapping.bbox[2],
-                            bbox_y1=mapping.bbox[3],
-                            match_confidence=mapping.confidence,
-                            match_strategy=mapping.strategy,
-                        )
-                        db.add(coord)
 
         doc.status = "aligned"
         db.flush()
