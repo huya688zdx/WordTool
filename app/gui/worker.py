@@ -219,12 +219,17 @@ class PipelineWorker(QThread):
         ]
 
         self.progress.emit("AI 检查标题层级...")
-        print(f"[AI标题] 发送 {len(para_list)} 个段落分析层级结构...")
+        word_positions = getattr(self, "_word_positions", None)
+        if word_positions:
+            print(f"[AI标题] 发送 {len(para_list)} 个段落 + {len(word_positions)} 个坐标分析层级结构...")
+        else:
+            print(f"[AI标题] 发送 {len(para_list)} 个段落分析层级结构...")
         try:
             from app.ai.heading_detector import detect_headings
             corrections = detect_headings(
                 llm_cfg["api_key"], llm_cfg["base_url"], llm_cfg["model"],
                 para_list,
+                positions=word_positions,
             )
             if corrections:
                 print(f"[AI标题] 发现 {len(corrections)} 个层级修正:")
