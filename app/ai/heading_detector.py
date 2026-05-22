@@ -93,11 +93,19 @@ Return ONLY JSON corrections."""
         # Parse JSON
         json_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', content, re.DOTALL)
         if json_match:
-            json_str = json_match.group(1)
+            json_str = json_match.group(1).strip()
         else:
             brace_start = content.find("{")
             brace_end = content.rfind("}")
-            json_str = content[brace_start:brace_end + 1] if brace_start >= 0 else content
+            if brace_start >= 0 and brace_end > brace_start:
+                json_str = content[brace_start:brace_end + 1]
+            else:
+                _log.warning("[RES %s] no JSON found in response, content=%s", request_id, content[:200])
+                return []
+
+        if not json_str:
+            _log.warning("[RES %s] empty JSON string", request_id)
+            return []
 
         data = json.loads(json_str)
         corrections = data.get("corrections", [])
