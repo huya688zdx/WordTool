@@ -47,10 +47,10 @@ class PipelineWorker(QThread):
                     self.progress.emit("解析 DOCX 结构...")
                     self._parse_docx(doc, db)
 
-                self._ai_heading_check(doc, db)
-
                 self.progress.emit("渲染 PDF（调用 Word）...")
                 self._render(doc, db)
+
+                self._ai_heading_check(doc, db)
 
                 self.progress.emit("对齐段落坐标...")
                 self._align(doc, db)
