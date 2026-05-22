@@ -11,38 +11,50 @@ from app.ai import get_ai_logger, get_conv_logger
 _log = get_ai_logger()
 _conv_log = get_conv_logger()
 
-HEADING_DETECT_PROMPT = """You are a document structure analyst. Review paragraphs from a Chinese technical document and identify ones that SHOULD be headings but are currently marked as · (normal text, Lv=0).
+HEADING_DETECT_PROMPT = """You are a document structure analyst. You will receive the COMPLETE content of a document — every paragraph with its full text, current heading level (from Word COM), and page position.
 
-You will receive each paragraph with its text, existing heading level, and pre-detected page position (P=page, Y=vertical position, H=text height from Word COM). Use BOTH text content AND position cues to judge heading levels.
+## Your Task
+Review ALL paragraphs and fix heading level errors. Word COM often assigns WRONG levels:
+- A chapter title "第1章 概述" might be marked H1 (correct) or H3/H10 (wrong — fix to H1)
+- A section like "2.1 系统架构" should be H2, but COM might mark it as · (Lv=0) or H5
+- A normal body paragraph might incorrectly get a heading level (H1/H2 etc.) → fix to 0
+- Content like "参考文献", "附录", "致谢" → H1 (back matter chapters)
 
-## Chinese Document Patterns You MUST Check
-- "第X章 ..." → heading_level 1
+You have the FULL document text — read through the content to understand the document's logical structure, then assign correct heading levels.
+
+## Chinese Heading Patterns
+- "第X章 ...", "第X部分 ..." → heading_level 1
 - "X. ...", "X.X ...", "X.X.X ..." at line start → heading_level 1/2/3 by dot count
 - "一、", "二、", "三、" → heading_level 1
 - "（一）", "（二）" → heading_level 2
-- Any short line (≤40 chars) that names a section topic with no body text around it → heading
-- Lines like 概述, 背景, 目的, 范围, 总结, 需求分析, 系统设计, 接口定义, 数据结构, 测试方案, 部署方案
+- Short line (≤40 chars) naming a section topic → heading (appropriate level)
+- Section keywords: 概述, 背景, 目的, 范围, 总结, 需求分析, 系统设计, 接口定义, 数据结构, 测试方案, 部署方案, 参考文献, 附录, 致谢
 
-## Position Cues (P=page, Y=top position, H=height)
+## Position Cues (P=page, Y=vertical pos, H=text height)
 - Page top (small Y) + new topic → likely H1
 - Larger H (bigger font) → more likely a heading
-- A standalone independent module at page top → H1, even without "第X章" prefix
+- Independent module at page top → H1, even without number prefix
 
 ## Rules
-1. Scan EVERY paragraph marked as · (Lv=0)
-2. If it matches ANY heading pattern → MUST include in corrections
-3. ERR ON MARKING — better to flag a borderline case than miss a real heading
-4. Use position cues: a paragraph at page top starting a new topic IS a heading
+1. Read through ALL paragraphs to understand the document structure
+2. ONLY include paragraphs whose heading_level is WRONG in the corrections
+3. Normal text (Lv=0) that looks like a heading → set correct heading_level
+4. Existing heading with wrong level → include with corrected heading_level
+5. Body text incorrectly marked as heading → set heading_level: 0
+6. ERR ON MARKING — better to flag a borderline case than miss a real heading
 
 ## Output
-Return ONLY JSON: {"corrections": [{"index": 5, "heading_level": 2, "reason": "2.1 系统架构 at page top"}]}
+Return ONLY JSON:
+{"corrections": [{"index": 5, "heading_level": 1, "reason": "H10→H1: 第1章 概述，COM误标为H10"}]}
 
 heading_level meanings:
+- 0: normal body text (not a heading)
 - 1: 第X章, X., 一、二、三、, independent module at page top
 - 2: X.X, （一）（二）, ①
 - 3: X.X.X, a. b. c.
+- 4+: deeper nesting
 
-Return {"corrections": []} ONLY if truly no missed headings. Double-check before empty."""
+Return {"corrections": []} ONLY if every heading level is correct. Double-check before returning empty."""
 
 
 def detect_headings(
@@ -95,20 +107,25 @@ def detect_headings(
 - Independent / self-contained modules → treat as H1 even without number prefix
 """
 
-    user_prompt = f"""Analyze {len(paragraphs)} paragraphs from a Chinese technical document.
+    user_prompt = f"""Review the COMPLETE document below. Every paragraph is listed with its full text, current Word COM heading level, and page position.
 
 Format: [index] marker P? Y? H? | full_text
-  H1/H2/H3 = existing heading
-  · = normal text (check these!)
+  H1/H2/... = existing heading level from Word COM (may be WRONG!)
+  · = normal text (Lv=0, but might actually be a heading)
 {pos_hint}
+
+=== FULL DOCUMENT CONTENT ===
+
 {para_text}
 
-## Constraints
-- A standalone/independent module section (even without "第X章" or "X." prefix) → heading_level 1
-- Paragraphs that clearly start a new topic, especially near page top → likely H1
+=== END OF DOCUMENT ===
 
-Find ALL · (Lv=0) paragraphs that look like headings.
-Return ONLY JSON corrections."""
+Read through all {len(paragraphs)} paragraphs. Understand the document's logical structure, then:
+1. Find · (Lv=0) paragraphs that are actually headings → assign correct heading_level
+2. Find existing headings with WRONG levels (e.g., H10 should be H1, H3 should be H2) → fix them
+3. Find body text incorrectly marked as heading → set heading_level to 0
+
+Return ONLY JSON corrections. Include ALL paragraphs whose heading_level needs to change."""
 
     from app.ai import make_http_client
     client = OpenAI(api_key=api_key, base_url=base_url, http_client=make_http_client())
