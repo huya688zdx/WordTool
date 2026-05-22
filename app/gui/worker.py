@@ -329,11 +329,14 @@ class PipelineWorker(QThread):
             print(msg)
             self.progress.emit(msg)
 
+        word_positions = getattr(self, "_word_positions", None)
+
         if ai_visual_enabled:
-            # AI visual detection — send page images to AI
+            # AI visual verification — send page images + Word COM positions + text to AI
             mappings = map_paragraphs_to_pdf(
                 para_data_list, str(pdf_path),
                 visual_detector=visual_detector,
+                word_positions=word_positions,
             )
             for mapping in mappings:
                 para = next(
@@ -355,7 +358,6 @@ class PipelineWorker(QThread):
                     db.add(coord)
         else:
             # Use Word COM positions if available, otherwise text search fallback
-            word_positions = getattr(self, "_word_positions", None)
             if word_positions:
                 print(f"[对齐] 使用 Word COM 提取的 {len(word_positions)} 个段落精确坐标")
                 self.progress.emit(f"对齐: 使用 Word COM 精确坐标 ({len(word_positions)} 段落)")
@@ -379,6 +381,7 @@ class PipelineWorker(QThread):
                 mappings = map_paragraphs_to_pdf(
                     para_data_list, str(pdf_path),
                     visual_detector=None,
+                    word_positions=word_positions,
                 )
                 for mapping in mappings:
                     para = next(

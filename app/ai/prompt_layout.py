@@ -1,22 +1,26 @@
-"""Prompt template for AI-assisted page layout detection."""
+"""Prompt template for AI-assisted page layout verification."""
 
-SYSTEM_PROMPT_LAYOUT = """You are a document layout analysis expert. Your task is to precisely identify paragraph boundaries in a document page image.
+from __future__ import annotations
+
+SYSTEM_PROMPT_LAYOUT = """You are a document layout verification expert. Your task is to verify and correct paragraph bounding boxes on a document page image.
 
 ## Your Task
-Given a screenshot of a document page, identify every distinct paragraph region. A paragraph is a block of text visually separated from other blocks by:
-- Vertical whitespace gaps (blank lines between paragraphs)
-- Indentation changes
-- Font size or style changes (headings vs body)
-- Alignment changes
+You will receive:
+1. A screenshot of a document page
+2. A list of pre-detected paragraphs with their bounding boxes and text content (from Word COM)
 
-## Critical Rules for Bounding Boxes
-1. **FULL text width**: Include the ENTIRE horizontal span of text — do NOT cut off text on the left or right side. Extend x0 leftward and x1 rightward to capture all characters.
-2. **FULL paragraph height**: Include ALL lines belonging to the same paragraph. If a paragraph has 5 lines, the bbox must cover all 5 lines.
-3. **Exclude headers and footers**: Skip page numbers, headers, footers — only detect main content paragraphs.
-4. **Image/diagram regions**: Mark them as type "image" with their full bbox.
+For each paragraph, compare its bounding box against the actual text visible in the image. If the box correctly bounds the text, keep it. If it's shifted, too small, too large, or wrong in any way — CORRECT IT.
+
+## Critical Rules
+1. **FULL text width**: The bbox must include the ENTIRE horizontal span of text — do NOT cut off text on left or right.
+2. **FULL paragraph height**: Include ALL lines belonging to the same paragraph.
+3. **Exclude headers and footers**: Skip page numbers, headers, footers.
+4. **Image/diagram regions**: Mark as type "image".
+5. **Keep existing paragraphs that look correct** — only fix the ones with visible errors.
+6. **If a pre-detected paragraph's text doesn't match what you see** in the image, adjust the bbox to match the actual visible text.
 
 ## Output Format
-Return ONLY a JSON object (no markdown, no explanation) in this exact format:
+Return ONLY a JSON object:
 ```
 {
   "paragraphs": [
@@ -27,47 +31,68 @@ Return ONLY a JSON object (no markdown, no explanation) in this exact format:
       "y0_pct": 0.15,
       "x1_pct": 0.88,
       "y1_pct": 0.25,
-      "content_preview": "First few words..."
+      "content_preview": "First few words...",
+      "corrected": false,
+      "correction_note": ""
     }
   ]
 }
 ```
 
-**IMPORTANT — Use percentage coordinates, not points:**
-- x0_pct, x1_pct: 0.0 (left edge) to 1.0 (right edge of the PAGE)
-- y0_pct, y1_pct: 0.0 (top edge) to 1.0 (bottom edge of the PAGE)
-- Example: a paragraph centered on the page spanning middle 70% width, from 20% to 40% height → x0_pct=0.15, y0_pct=0.20, x1_pct=0.85, y1_pct=0.40
-- Sort paragraphs by y0_pct ascending
-
-## Example
-For a page with a heading and two body paragraphs:
-```
-{
-  "paragraphs": [
-    {"index": 0, "type": "heading", "x0_pct": 0.15, "y0_pct": 0.14, "x1_pct": 0.85, "y1_pct": 0.17, "content_preview": "Chapter 1"},
-    {"index": 1, "type": "text", "x0_pct": 0.15, "y0_pct": 0.20, "x1_pct": 0.85, "y1_pct": 0.32, "content_preview": "This is the first..."},
-    {"index": 2, "type": "text", "x0_pct": 0.15, "y0_pct": 0.35, "x1_pct": 0.85, "y1_pct": 0.50, "content_preview": "Second paragraph..."}
-  ]
-}
-```
-
-Be precise. Measure carefully. Each coordinate matters. Use percentages of the FULL page dimensions."""
+- x0_pct, x1_pct: 0.0 (left) to 1.0 (right of PAGE)
+- y0_pct, y1_pct: 0.0 (top) to 1.0 (bottom of PAGE)
+- "corrected": true if you changed the bbox, false if the original was correct
+- "correction_note": brief explanation if corrected, empty string if not
+- Sort by y0_pct ascending
+- Include EVERY paragraph from the input list — do not drop any"""
 
 
-def make_layout_prompt(page_number: int, total_pages: int, doc_hint: str = "") -> str:
-    """Build the user prompt for layout detection.
+def make_layout_prompt(
+    page_number: int,
+    total_pages: int,
+    doc_hint: str = "",
+    existing_paragraphs: list[dict] | None = None,
+) -> str:
+    """Build the user prompt for layout verification.
 
     Args:
         page_number: Current page number (1-based)
         total_pages: Total pages in document
-        doc_hint: Optional hint about document content (e.g., "Chinese technical specification")
+        doc_hint: Optional hint about document content
+        existing_paragraphs: List of pre-detected paragraphs from Word COM.
+            Each dict: index, text, x0_pct, y0_pct, x1_pct, y1_pct, heading_level
     """
     hint = ""
     if doc_hint:
         hint = f"\nDocument type hint: {doc_hint}"
 
-    return f"""Please identify all paragraph boundaries on this page.
+    para_list = ""
+    if existing_paragraphs:
+        lines = []
+        for p in existing_paragraphs:
+            idx = p.get("index", "?")
+            text = (p.get("text") or "").strip()[:80]
+            lv = p.get("heading_level") or 0
+            level_tag = f"H{lv}" if lv else "·"
+            lines.append(
+                f"  [{idx}] {level_tag} "
+                f"x0={p.get('x0_pct', 0):.3f} y0={p.get('y0_pct', 0):.3f} "
+                f"x1={p.get('x1_pct', 0):.3f} y1={p.get('y1_pct', 0):.3f} "
+                f"| {text}"
+            )
+        para_list = "\n".join(lines)
+
+    return f"""Verify and correct the paragraph bounding boxes on this page.
 
 Page: {page_number} / {total_pages}{hint}
 
-Return ONLY the JSON output as specified. No other text."""
+## Pre-detected paragraphs (Word COM) — verify against the image:
+
+{para_list}
+
+For each paragraph above:
+- Check if the bbox correctly covers the visible text in the image
+- If correct → keep as-is, set corrected=false
+- If wrong → fix the coordinates, set corrected=true, add a short note
+
+Return ONLY the JSON output. Include ALL paragraphs from the list above."""

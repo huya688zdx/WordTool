@@ -41,21 +41,27 @@ class VisualPageDetector:
         page_number: int = 1,
         total_pages: int = 1,
         doc_hint: str = "",
+        existing_paragraphs: list[dict] | None = None,
     ) -> list[dict]:
-        """Detect paragraphs on a page image.
+        """Verify and correct paragraph positions on a page image.
 
         Args:
             page_image_bytes: PNG image of the page
             page_number: 1-based page number
             total_pages: Total page count
             doc_hint: Optional document description
+            existing_paragraphs: Pre-detected paragraphs from Word COM.
+                Each dict: index, text, x0_pct, y0_pct, x1_pct, y1_pct, heading_level
 
         Returns:
             List of dicts with keys: index, type, x0, y0, x1, y1, content_preview
         """
         image_b64 = base64.b64encode(page_image_bytes).decode("ascii")
         data_uri = f"data:image/png;base64,{image_b64}"
-        user_prompt = make_layout_prompt(page_number, total_pages, doc_hint)
+        user_prompt = make_layout_prompt(
+            page_number, total_pages, doc_hint,
+            existing_paragraphs=existing_paragraphs,
+        )
 
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT_LAYOUT},
