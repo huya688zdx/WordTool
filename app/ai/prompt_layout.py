@@ -2,46 +2,47 @@
 
 from __future__ import annotations
 
-SYSTEM_PROMPT_VISUAL_HEADING = """You are a strict document proofreader. Word COM has pre-assigned heading levels to paragraphs, but its levels are FREQUENTLY WRONG. Your job is to find and fix EVERY error.
+SYSTEM_PROMPT_VISUAL_HEADING = """You are a document structure proofreader. Word COM has pre-assigned heading levels, but its detection is seriously broken. Your job: analyze the document's REAL logical structure by reading the text AND looking at the page image, then fix heading levels.
 
-## CRITICAL: Word COM Systematic Errors
-Word COM's heading level detection has KNOWN bugs:
-- Chapter titles (第X章, 概述, 引言) often get H6~H10 instead of H1
-- Numbered sections (2.1, 3.2.1) often get wrong levels or Lv=0
-- Body text sometimes gets falsely promoted to a heading level
-- Chinese numbered headings (一、, （二）) are frequently missed (Lv=0)
+## Step 1 — Analyze Document Structure FIRST
+Read the text AND look at the image. Understand how many levels this document ACTUALLY has:
+- If it's chapters → sections → that's H1 + H2 (2 levels)
+- If it's chapters → sections → sub-sections → that's H1 + H2 + H3 (3 levels)
+- MOST Chinese technical documents only have 2 levels (H1 + H2)
 
-## Exact Level Rules — Apply These Strictly
-| Text Pattern | Correct Level |
+## Step 2 — Assign Levels Based on Content
+**CRITICAL: Only use levels this document actually needs. Do NOT invent H3/H4/H5 if the document only has H1+H2 structure.**
+
+| Document Role | Assign |
 |---|---|
-| 第X章, 第X部分, 概述, 引言, 背景, 总结, 参考文献, 附录, 致谢 | H1 |
-| X. (single digit + dot at line start, e.g. "1. 系统设计") | H1 |
-| X.X (e.g. "1.1", "2.3") | H2 |
-| X.X.X (e.g. "3.1.2") | H3 |
-| 一、二、三、... (Chinese numbered list as section title) | H1 |
-| （一）（二）... | H2 |
-| Short line (< 40 chars) at page top, large font → section title | H1 or H2 |
-| Long paragraph (> 100 chars), normal font → body text | Lv=0 |
+| Chapter / major section: "第X章", numbered "1.", "一、", or top-level topic at page top with large font | H1 |
+| Sub-section within a chapter: "1.1", "（一）", or clearly subordinate to H1 | H2 |
+| Deep sub-section: "1.1.1" — only if document truly has 3-level nesting | H3 |
+| Body paragraph (long text, normal font) | 0 |
 
-## Aggressive Detection — You MUST
-1. Check EVERY paragraph. If current level does NOT match the rules above → it's an error.
-2. Levels at H6, H7, H8, H9, H10 are ALWAYS wrong — fix them to appropriate H1~H4.
-3. A paragraph marked Lv=0 (·) that matches any heading pattern → MUST be flagged.
-4. A long body paragraph marked as H1~H5 → MUST be demoted to Lv=0.
-5. ERR ON THE SIDE OF CORRECTING. Better to flag 10 false positives than miss 1 real error.
-6. DO NOT return empty corrections unless you have verified EVERY paragraph and they are ALL correct.
+## Step 3 — Fix Word COM Bugs
+Word COM KNOWN errors:
+- H6~H10 → ALWAYS wrong, fix to H1 or H2 based on content and visual prominence
+- Lv=0 (·) section titles → COM missed them entirely, assign H1 or H2
+- Body text marked as any heading → demote to 0
+
+## Rules
+1. Analyze the document's REAL hierarchy first — don't blindly apply a fixed mapping
+2. H6~H10 always wrong → H1 or H2
+3. Only use H3 if document has "1.1.1" style deep nesting
+4. NEVER use H4 or deeper unless absolutely certain
+5. Body text wrongly marked as heading → 0
+6. ERR ON CORRECTING. Return empty ONLY if every level is perfect.
 
 ## Output
-Return ONLY a JSON object (no markdown, no explanation):
+Return ONLY JSON:
 ```
 {"corrections": [
-  {"index": 5, "heading_level": 1, "reason": "H10→H1: 第1章 概述，章标题必须H1"},
-  {"index": 6, "heading_level": 0, "reason": "H2→0: 大段正文被误标为标题"},
-  {"index": 12, "heading_level": 2, "reason": "Lv0→H2: 2.1 系统架构，编号节标题"}
+  {"index": 5, "heading_level": 1, "reason": "H10→H1: 第1章 概述，章标题"},
+  {"index": 8, "heading_level": 2, "reason": "H10→H2: 1.1 背景，节标题非章标题"},
+  {"index": 15, "heading_level": 0, "reason": "H1→0: 大段正文被COM误标为标题"}
 ]}
-```
-
-DO NOT return {"corrections": []} casually. Only if every single paragraph's level is perfect."""
+```"""
 
 
 def make_visual_heading_prompt(
@@ -60,17 +61,19 @@ def make_visual_heading_prompt(
 
     para_list = "\n".join(lines)
 
-    return f"""Page {page_number} of {total_pages}. Word COM heading levels are listed below. Fix ALL errors.
+    return f"""Page {page_number} of {total_pages}.
 
-Look at the screenshot AND read the text. Apply the exact level rules from the system prompt.
+First, look at the image and analyze the document's structure:
+- How many real heading levels does this document have? (usually 2: H1+H2)
+- Which paragraphs are chapter titles (H1)? Which are sections (H2)?
 
-## Paragraphs to verify:
+Then, fix errors in this list:
 
 {para_list}
 
-## Requirements
-- Find and fix EVERY heading level error on this page
-- H6~H10 are always bugs → must be corrected
-- Lv=0 paragraphs that look like section titles → must be assigned correct level
-- Body text wrongly marked as heading → demote to Lv=0
-- Return JSON corrections for ALL errors found"""
+Rules:
+- H6~H10 → always bugs, fix to H1 or H2
+- Lv=0 (·) section titles → assign H1 or H2
+- Body text marked as heading → fix to 0
+- Do NOT invent H3/H4/H5 — only use levels the document actually needs
+- Return JSON corrections"""

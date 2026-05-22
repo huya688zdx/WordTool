@@ -11,50 +11,50 @@ from app.ai import get_ai_logger, get_conv_logger
 _log = get_ai_logger()
 _conv_log = get_conv_logger()
 
-HEADING_DETECT_PROMPT = """You are a strict document proofreader. Word COM has pre-assigned heading levels to every paragraph, but its levels are FREQUENTLY WRONG. Your job is to find and fix EVERY error in the complete document.
+HEADING_DETECT_PROMPT = """You are a document structure proofreader. Word COM has pre-assigned heading levels, but its detection is seriously broken. Your job: analyze the document's REAL logical structure, then fix heading levels.
 
-## CRITICAL: Word COM Systematic Errors
-Word COM's heading detection has KNOWN bugs:
-- Chapter titles (第X章, 概述, 引言) often get H6~H10 instead of H1
-- Numbered sections (2.1, 3.2.1) often get wrong levels or Lv=0
-- Body text sometimes gets falsely promoted to a heading level
-- Chinese numbered headings (一、, （二）) are frequently missed (Lv=0)
+## Step 1 — Analyze Document Structure FIRST
+Read ALL paragraphs. Understand how many levels this document ACTUALLY has:
+- If it's chapters → sections → that's H1 + H2 (2 levels)
+- If it's chapters → sections → sub-sections → that's H1 + H2 + H3 (3 levels)
+- MOST Chinese technical documents only have 2 levels (H1 + H2)
 
-## Exact Level Rules — Apply These Strictly
-| Text Pattern | Correct Level |
+## Step 2 — Assign Levels Based on Content
+**CRITICAL: Only use levels this document actually needs. Do NOT invent H3/H4/H5 if the document only has H1+H2 structure.**
+
+| Document Role | Assign |
 |---|---|
-| 第X章, 第X部分, 概述, 引言, 背景, 总结, 参考文献, 附录, 致谢 | H1 |
-| X. (single digit + dot at line start, e.g. "1. 系统设计") | H1 |
-| X.X (e.g. "1.1", "2.3") | H2 |
-| X.X.X (e.g. "3.1.2") | H3 |
-| 一、二、三、... (Chinese numbered list as section title) | H1 |
-| （一）（二）... | H2 |
-| Short line (< 40 chars) at page top → section title | H1 or H2 |
-| Long paragraph (> 100 chars), normal font → body text | Lv=0 |
+| Chapter / major section: "第X章", numbered "1.", "一、", or top-level topic | H1 |
+| Sub-section within a chapter: "1.1", "（一）", or clearly subordinate to H1 | H2 |
+| Deep sub-section: "1.1.1" — only if document truly has 3-level nesting | H3 |
+| Body paragraph (long text) | 0 |
 
-## Aggressive Detection — You MUST
-1. Read ALL paragraphs to understand the full document structure first
-2. Check EVERY paragraph. If current level does NOT match the rules above → it's an error
-3. Levels at H6, H7, H8, H9, H10 are ALWAYS wrong — fix them to appropriate H1~H4
-4. A paragraph marked Lv=0 (·) that matches any heading pattern → MUST be flagged
-5. A long body paragraph marked as H1~H5 → MUST be demoted to Lv=0
-6. ERR ON THE SIDE OF CORRECTING. Better to flag 10 false positives than miss 1 real error
-7. DO NOT return empty corrections unless EVERY single paragraph's level is perfect
+## Step 3 — Fix Word COM Bugs
+- H6~H10 → ALWAYS wrong, fix to H1 or H2 based on content and heading position
+- Lv=0 (·) section titles → COM missed them, assign H1 or H2
+- Body text marked as any heading → demote to 0
 
 ## Position Cues (P=page, Y=vertical pos, H=text height)
 - Page top (small Y) + new topic → likely H1
 - Larger H (bigger font) → more likely a heading
 
+## Rules
+1. Analyze the document's REAL hierarchy first — don't blindly apply a fixed mapping
+2. H6~H10 always wrong → H1 or H2 (not H3/H4/H5!)
+3. Only use H3 if document has "1.1.1" style deep nesting
+4. NEVER use H4 or deeper unless absolutely certain
+5. Body text wrongly marked as heading → 0
+6. ERR ON CORRECTING. Return empty ONLY if every level is perfect.
+
 ## Output
 Return ONLY JSON:
-{"corrections": [{"index": 5, "heading_level": 1, "reason": "H10→H1: 第1章 概述，章标题必须H1"}]}
+{"corrections": [{"index": 5, "heading_level": 1, "reason": "H10→H1: 第1章 概述，章标题"}]}
 
 heading_level meanings:
-- 0: normal body text (not a heading)
-- 1: 第X章, X., 一、二、三、, independent module at page top
-- 2: X.X, （一）（二）, ①
-- 3: X.X.X, a. b. c.
-- 4+: deeper nesting
+- 0: body text
+- 1: chapter / major section
+- 2: sub-section
+- 3: deep sub-section (rare, only if doc has 3-level nesting)
 
 DO NOT return {"corrections": []} casually. Only if every single paragraph's level is perfect."""
 
