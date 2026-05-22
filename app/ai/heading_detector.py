@@ -11,41 +11,43 @@ from app.ai import get_ai_logger, get_conv_logger
 _log = get_ai_logger()
 _conv_log = get_conv_logger()
 
-HEADING_DETECT_PROMPT = """You are a document structure analyst. You will receive the COMPLETE content of a document — every paragraph with its full text, current heading level (from Word COM), and page position.
+HEADING_DETECT_PROMPT = """You are a strict document proofreader. Word COM has pre-assigned heading levels to every paragraph, but its levels are FREQUENTLY WRONG. Your job is to find and fix EVERY error in the complete document.
 
-## Your Task
-Review ALL paragraphs and fix heading level errors. Word COM often assigns WRONG levels:
-- A chapter title "第1章 概述" might be marked H1 (correct) or H3/H10 (wrong — fix to H1)
-- A section like "2.1 系统架构" should be H2, but COM might mark it as · (Lv=0) or H5
-- A normal body paragraph might incorrectly get a heading level (H1/H2 etc.) → fix to 0
-- Content like "参考文献", "附录", "致谢" → H1 (back matter chapters)
+## CRITICAL: Word COM Systematic Errors
+Word COM's heading detection has KNOWN bugs:
+- Chapter titles (第X章, 概述, 引言) often get H6~H10 instead of H1
+- Numbered sections (2.1, 3.2.1) often get wrong levels or Lv=0
+- Body text sometimes gets falsely promoted to a heading level
+- Chinese numbered headings (一、, （二）) are frequently missed (Lv=0)
 
-You have the FULL document text — read through the content to understand the document's logical structure, then assign correct heading levels.
+## Exact Level Rules — Apply These Strictly
+| Text Pattern | Correct Level |
+|---|---|
+| 第X章, 第X部分, 概述, 引言, 背景, 总结, 参考文献, 附录, 致谢 | H1 |
+| X. (single digit + dot at line start, e.g. "1. 系统设计") | H1 |
+| X.X (e.g. "1.1", "2.3") | H2 |
+| X.X.X (e.g. "3.1.2") | H3 |
+| 一、二、三、... (Chinese numbered list as section title) | H1 |
+| （一）（二）... | H2 |
+| Short line (< 40 chars) at page top → section title | H1 or H2 |
+| Long paragraph (> 100 chars), normal font → body text | Lv=0 |
 
-## Chinese Heading Patterns
-- "第X章 ...", "第X部分 ..." → heading_level 1
-- "X. ...", "X.X ...", "X.X.X ..." at line start → heading_level 1/2/3 by dot count
-- "一、", "二、", "三、" → heading_level 1
-- "（一）", "（二）" → heading_level 2
-- Short line (≤40 chars) naming a section topic → heading (appropriate level)
-- Section keywords: 概述, 背景, 目的, 范围, 总结, 需求分析, 系统设计, 接口定义, 数据结构, 测试方案, 部署方案, 参考文献, 附录, 致谢
+## Aggressive Detection — You MUST
+1. Read ALL paragraphs to understand the full document structure first
+2. Check EVERY paragraph. If current level does NOT match the rules above → it's an error
+3. Levels at H6, H7, H8, H9, H10 are ALWAYS wrong — fix them to appropriate H1~H4
+4. A paragraph marked Lv=0 (·) that matches any heading pattern → MUST be flagged
+5. A long body paragraph marked as H1~H5 → MUST be demoted to Lv=0
+6. ERR ON THE SIDE OF CORRECTING. Better to flag 10 false positives than miss 1 real error
+7. DO NOT return empty corrections unless EVERY single paragraph's level is perfect
 
 ## Position Cues (P=page, Y=vertical pos, H=text height)
 - Page top (small Y) + new topic → likely H1
 - Larger H (bigger font) → more likely a heading
-- Independent module at page top → H1, even without number prefix
-
-## Rules
-1. Read through ALL paragraphs to understand the document structure
-2. ONLY include paragraphs whose heading_level is WRONG in the corrections
-3. Normal text (Lv=0) that looks like a heading → set correct heading_level
-4. Existing heading with wrong level → include with corrected heading_level
-5. Body text incorrectly marked as heading → set heading_level: 0
-6. ERR ON MARKING — better to flag a borderline case than miss a real heading
 
 ## Output
 Return ONLY JSON:
-{"corrections": [{"index": 5, "heading_level": 1, "reason": "H10→H1: 第1章 概述，COM误标为H10"}]}
+{"corrections": [{"index": 5, "heading_level": 1, "reason": "H10→H1: 第1章 概述，章标题必须H1"}]}
 
 heading_level meanings:
 - 0: normal body text (not a heading)
@@ -54,7 +56,7 @@ heading_level meanings:
 - 3: X.X.X, a. b. c.
 - 4+: deeper nesting
 
-Return {"corrections": []} ONLY if every heading level is correct. Double-check before returning empty."""
+DO NOT return {"corrections": []} casually. Only if every single paragraph's level is perfect."""
 
 
 def detect_headings(

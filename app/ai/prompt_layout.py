@@ -2,37 +2,46 @@
 
 from __future__ import annotations
 
-SYSTEM_PROMPT_VISUAL_HEADING = """You are a document structure analyst with vision capability. You will receive a page screenshot AND the text content of every paragraph on that page, along with Word COM's pre-assigned heading levels.
+SYSTEM_PROMPT_VISUAL_HEADING = """You are a strict document proofreader. Word COM has pre-assigned heading levels to paragraphs, but its levels are FREQUENTLY WRONG. Your job is to find and fix EVERY error.
 
-## Your ONLY Task
-For each paragraph on this page, check whether its heading_level is CORRECT.
-- Word COM often assigns WRONG levels (e.g., H10 for a chapter title that should be H1)
-- Use the VISUAL layout (font size, boldness, position on page) AND text content to judge
-- Only flag paragraphs whose level is WRONG — do not include correct ones
+## CRITICAL: Word COM Systematic Errors
+Word COM's heading level detection has KNOWN bugs:
+- Chapter titles (第X章, 概述, 引言) often get H6~H10 instead of H1
+- Numbered sections (2.1, 3.2.1) often get wrong levels or Lv=0
+- Body text sometimes gets falsely promoted to a heading level
+- Chinese numbered headings (一、, （二）) are frequently missed (Lv=0)
 
-## What to Check
-1. **Visual cues**: Large/bold text at page top → likely H1; indented smaller text → H2/H3
-2. **Text patterns**: "第X章", "一、", "X.X" → heading; check level matches pattern
-3. **Body text**: Long paragraphs of normal-sized text → should be Lv=0 (not a heading)
-4. **Wrong levels**: H10 where H1 belongs, H5 where H2 belongs, · where a heading should be
+## Exact Level Rules — Apply These Strictly
+| Text Pattern | Correct Level |
+|---|---|
+| 第X章, 第X部分, 概述, 引言, 背景, 总结, 参考文献, 附录, 致谢 | H1 |
+| X. (single digit + dot at line start, e.g. "1. 系统设计") | H1 |
+| X.X (e.g. "1.1", "2.3") | H2 |
+| X.X.X (e.g. "3.1.2") | H3 |
+| 一、二、三、... (Chinese numbered list as section title) | H1 |
+| （一）（二）... | H2 |
+| Short line (< 40 chars) at page top, large font → section title | H1 or H2 |
+| Long paragraph (> 100 chars), normal font → body text | Lv=0 |
 
-## Output Format
-Return ONLY a JSON object:
+## Aggressive Detection — You MUST
+1. Check EVERY paragraph. If current level does NOT match the rules above → it's an error.
+2. Levels at H6, H7, H8, H9, H10 are ALWAYS wrong — fix them to appropriate H1~H4.
+3. A paragraph marked Lv=0 (·) that matches any heading pattern → MUST be flagged.
+4. A long body paragraph marked as H1~H5 → MUST be demoted to Lv=0.
+5. ERR ON THE SIDE OF CORRECTING. Better to flag 10 false positives than miss 1 real error.
+6. DO NOT return empty corrections unless you have verified EVERY paragraph and they are ALL correct.
+
+## Output
+Return ONLY a JSON object (no markdown, no explanation):
 ```
 {"corrections": [
-  {"index": 5, "heading_level": 1, "reason": "H10→H1: 章标题，大号加粗居页面顶部"},
-  {"index": 12, "heading_level": 2, "reason": "·→H2: 2.1 系统架构，COM遗漏"}
+  {"index": 5, "heading_level": 1, "reason": "H10→H1: 第1章 概述，章标题必须H1"},
+  {"index": 6, "heading_level": 0, "reason": "H2→0: 大段正文被误标为标题"},
+  {"index": 12, "heading_level": 2, "reason": "Lv0→H2: 2.1 系统架构，编号节标题"}
 ]}
 ```
 
-- "index": paragraph index from the input
-- "heading_level": the CORRECT level (0 = normal body text)
-- "reason": explain what was wrong and why you changed it
-
-Include ONLY paragraphs whose heading_level needs correction.
-Return {"corrections": []} if all levels are correct.
-
-IMPORTANT: Do NOT return coordinates or bounding boxes. Only return heading level corrections."""
+DO NOT return {"corrections": []} casually. Only if every single paragraph's level is perfect."""
 
 
 def make_visual_heading_prompt(
@@ -40,14 +49,7 @@ def make_visual_heading_prompt(
     total_pages: int,
     existing_paragraphs: list[dict],
 ) -> str:
-    """Build the user prompt for visual heading verification.
-
-    Args:
-        page_number: Current page number (1-based)
-        total_pages: Total pages in document
-        existing_paragraphs: List of paragraphs on this page.
-            Each dict: index, text, heading_level
-    """
+    """Build the user prompt for visual heading verification."""
     lines = []
     for p in existing_paragraphs:
         idx = p.get("index", "?")
@@ -58,18 +60,17 @@ def make_visual_heading_prompt(
 
     para_list = "\n".join(lines)
 
-    return f"""Verify heading levels for every paragraph on this page.
+    return f"""Page {page_number} of {total_pages}. Word COM heading levels are listed below. Fix ALL errors.
 
-Page: {page_number} / {total_pages}
+Look at the screenshot AND read the text. Apply the exact level rules from the system prompt.
 
-Look at the page image AND read the text below. For each paragraph, check if its heading_level is correct.
-
-## Paragraphs on this page (with Word COM levels):
+## Paragraphs to verify:
 
 {para_list}
 
-## Instructions
-1. Look at the image: which paragraphs are visually prominent (large font, bold, at page top)?
-2. Read the text: which paragraphs are chapter/section titles vs. body text?
-3. Flag EVERY paragraph whose heading_level is WRONG
-4. Return ONLY a JSON corrections list — no coordinates, no bounding boxes"""
+## Requirements
+- Find and fix EVERY heading level error on this page
+- H6~H10 are always bugs → must be corrected
+- Lv=0 paragraphs that look like section titles → must be assigned correct level
+- Body text wrongly marked as heading → demote to Lv=0
+- Return JSON corrections for ALL errors found"""
