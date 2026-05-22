@@ -13,10 +13,11 @@ import re
 import time
 from typing import Optional
 
-from app.ai import get_ai_logger
+from app.ai import get_ai_logger, get_conv_logger
 from app.ai.prompt_layout import SYSTEM_PROMPT_LAYOUT, make_layout_prompt
 
 _ai_logger = get_ai_logger()
+_conv_logger = get_conv_logger()
 
 
 class VisualPageDetector:
@@ -81,6 +82,15 @@ class VisualPageDetector:
             "[REQ %s] user_prompt=%s", request_id, user_prompt,
         )
 
+        # Full conversation log (image replaced with size placeholder)
+        _conv_logger.info("=== REQ %s ===", request_id)
+        _conv_logger.info("model=%s base_url=%s page=%d/%d image_size=%d",
+                          self.model, self.base_url, page_number, total_pages,
+                          len(page_image_bytes))
+        _conv_logger.debug("--- system ---\n%s", SYSTEM_PROMPT_LAYOUT)
+        _conv_logger.debug("--- user (text) ---\n%s", user_prompt)
+        _conv_logger.debug("--- user (image) --- [%d bytes base64 PNG]", len(image_b64))
+
         t0 = time.time()
         try:
             response = self._client.chat.completions.create(
@@ -99,6 +109,12 @@ class VisualPageDetector:
                 usage.completion_tokens if usage else 0,
             )
             _ai_logger.debug("[RES %s] raw_content=%s", request_id, content)
+
+            _conv_logger.info("=== RES %s elapsed=%.1fs tokens_in=%d tokens_out=%d ===",
+                              request_id, elapsed,
+                              usage.prompt_tokens if usage else 0,
+                              usage.completion_tokens if usage else 0)
+            _conv_logger.debug("%s", content)
 
             paragraphs = self._parse_response(content)
             _ai_logger.info(

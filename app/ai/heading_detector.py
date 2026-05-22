@@ -6,9 +6,10 @@ import json
 import re
 import time
 
-from app.ai import get_ai_logger
+from app.ai import get_ai_logger, get_conv_logger
 
 _log = get_ai_logger()
+_conv_log = get_conv_logger()
 
 HEADING_DETECT_PROMPT = """You are a document structure analyst. Review paragraphs from a Chinese technical document and identify ones that SHOULD be headings but are currently marked as · (normal text, Lv=0).
 
@@ -70,6 +71,12 @@ Return ONLY JSON corrections."""
     _log.debug("[REQ %s] system_prompt=%s", request_id, HEADING_DETECT_PROMPT[:200])
     _log.debug("[REQ %s] user_prompt=%s", request_id, user_prompt[:500])
 
+    # Full conversation log
+    _conv_log.info("=== REQ %s ===", request_id)
+    _conv_log.info("model=%s base_url=%s paragraphs=%d", model, base_url, len(paragraphs))
+    _conv_log.debug("--- system ---\n%s", HEADING_DETECT_PROMPT)
+    _conv_log.debug("--- user ---\n%s", user_prompt)
+
     t0 = time.time()
     try:
         response = client.chat.completions.create(
@@ -89,6 +96,12 @@ Return ONLY JSON corrections."""
                    usage.prompt_tokens if usage else 0,
                    usage.completion_tokens if usage else 0)
         _log.debug("[RES %s] content=%s", request_id, content[:500])
+
+        _conv_log.info("=== RES %s elapsed=%.1fs tokens_in=%d tokens_out=%d ===",
+                       request_id, elapsed,
+                       usage.prompt_tokens if usage else 0,
+                       usage.completion_tokens if usage else 0)
+        _conv_log.debug("%s", content)
 
         # Parse JSON
         json_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', content, re.DOTALL)

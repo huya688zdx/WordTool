@@ -60,3 +60,26 @@ if not _ai_logger.handlers:
 
 def get_ai_logger() -> logging.Logger:
     return _ai_logger
+
+
+# ── Full conversation logger (no truncation, file-only) ─────────────────────
+_conv_logger = logging.getLogger("wordagent.ai.conversation")
+_conv_logger.setLevel(logging.DEBUG)
+
+if not _conv_logger.handlers:
+    _conv_dir = Path("./data/logs")
+    _conv_dir.mkdir(parents=True, exist_ok=True)
+
+    _cfh = logging.FileHandler(_conv_dir / "ai_conversations.log", encoding="utf-8")
+    _cfh.setLevel(logging.DEBUG)
+    _cfh.setFormatter(logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    ))
+    _conv_logger.addHandler(_cfh)
+    _conv_logger.propagate = False
+
+
+def get_conv_logger() -> logging.Logger:
+    """Logger that writes FULL AI prompts/responses to ai_conversations.log."""
+    return _conv_logger

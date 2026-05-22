@@ -4,10 +4,11 @@ from typing import List, Dict, Optional
 
 from openai import OpenAI
 
-from app.ai import get_ai_logger, make_http_client
+from app.ai import get_ai_logger, get_conv_logger, make_http_client
 
 logger = logging.getLogger(__name__)
 _ai_log = get_ai_logger()
+_conv_log = get_conv_logger()
 
 
 class LLMClient:
@@ -52,13 +53,19 @@ class LLMClient:
             "[REQ %s] model=%s base_url=%s temperature=%.2f",
             request_id, self.model, self.base_url, temperature,
         )
+        # Full conversation log (untruncated)
+        _conv_log.info("=== REQ %s ===", request_id)
+        _conv_log.info("model=%s base_url=%s temperature=%.2f", self.model, self.base_url, temperature)
         for i, msg in enumerate(messages):
             role = msg.get("role", "?")
             content = msg.get("content", "")
             if isinstance(content, str):
                 preview = content[:300] + ("..." if len(content) > 300 else "")
+                _conv_log.debug("--- msg[%d] role=%s ---\n%s", i, role, content)
             else:
+                # Vision content (list of parts) — log text parts, skip base64 blobs
                 preview = str(content)[:300]
+                _conv_log.debug("--- msg[%d] role=%s (vision) ---\n%s", i, role, content)
             _ai_log.debug("[REQ %s] msg[%d] role=%s content=%s", request_id, i, role, preview)
 
         t0 = time.time()
@@ -78,6 +85,11 @@ class LLMClient:
                 usage.completion_tokens if usage else 0,
             )
             _ai_log.debug("[RES %s] content=%s", request_id, content[:500])
+            _conv_log.info("=== RES %s elapsed=%.1fs tokens_in=%d tokens_out=%d ===",
+                           request_id, elapsed,
+                           usage.prompt_tokens if usage else 0,
+                           usage.completion_tokens if usage else 0)
+            _conv_log.debug("%s", content)
             return content
         except Exception as e:
             elapsed = time.time() - t0
