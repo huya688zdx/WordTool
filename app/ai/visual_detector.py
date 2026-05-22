@@ -93,9 +93,9 @@ class VisualPageDetector:
         _conv_logger.info("model=%s base_url=%s page=%d/%d image_size=%d",
                           self.model, self.base_url, page_number, total_pages,
                           len(page_image_bytes))
-        _conv_logger.debug("--- system ---\n%s", SYSTEM_PROMPT_LAYOUT)
-        _conv_logger.debug("--- user (text) ---\n%s", user_prompt)
-        _conv_logger.debug("--- user (image) --- [%d bytes base64 PNG]", len(image_b64))
+        _conv_logger.info("--- system ---\n%s", SYSTEM_PROMPT_LAYOUT)
+        _conv_logger.info("--- user (text) ---\n%s", user_prompt)
+        _conv_logger.info("--- user (image) --- [%d bytes base64 PNG]", len(image_b64))
 
         t0 = time.time()
         try:
@@ -120,7 +120,7 @@ class VisualPageDetector:
                               request_id, elapsed,
                               usage.prompt_tokens if usage else 0,
                               usage.completion_tokens if usage else 0)
-            _conv_logger.debug("%s", content)
+            _conv_logger.info("%s", content)
 
             paragraphs = self._parse_response(content)
             _ai_logger.info(

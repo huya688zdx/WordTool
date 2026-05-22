@@ -137,8 +137,8 @@ Return ONLY JSON corrections. Include ALL paragraphs whose heading_level needs t
     # Full conversation log
     _conv_log.info("=== REQ %s ===", request_id)
     _conv_log.info("model=%s base_url=%s paragraphs=%d", model, base_url, len(paragraphs))
-    _conv_log.debug("--- system ---\n%s", HEADING_DETECT_PROMPT)
-    _conv_log.debug("--- user ---\n%s", user_prompt)
+    _conv_log.info("--- system ---\n%s", HEADING_DETECT_PROMPT)
+    _conv_log.info("--- user ---\n%s", user_prompt)
 
     t0 = time.time()
     try:
@@ -164,7 +164,7 @@ Return ONLY JSON corrections. Include ALL paragraphs whose heading_level needs t
                        request_id, elapsed,
                        usage.prompt_tokens if usage else 0,
                        usage.completion_tokens if usage else 0)
-        _conv_log.debug("%s", content)
+        _conv_log.info("%s", content)
 
         # Parse JSON
         json_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', content, re.DOTALL)

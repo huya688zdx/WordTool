@@ -61,11 +61,11 @@ class LLMClient:
             content = msg.get("content", "")
             if isinstance(content, str):
                 preview = content[:300] + ("..." if len(content) > 300 else "")
-                _conv_log.debug("--- msg[%d] role=%s ---\n%s", i, role, content)
+                _conv_log.info("--- msg[%d] role=%s ---\n%s", i, role, content)
             else:
                 # Vision content (list of parts) — log text parts, skip base64 blobs
                 preview = str(content)[:300]
-                _conv_log.debug("--- msg[%d] role=%s (vision) ---\n%s", i, role, content)
+                _conv_log.info("--- msg[%d] role=%s (vision) ---\n%s", i, role, content)
             _ai_log.debug("[REQ %s] msg[%d] role=%s content=%s", request_id, i, role, preview)
 
         t0 = time.time()
@@ -89,7 +89,7 @@ class LLMClient:
                            request_id, elapsed,
                            usage.prompt_tokens if usage else 0,
                            usage.completion_tokens if usage else 0)
-            _conv_log.debug("%s", content)
+            _conv_log.info("%s", content)
             return content
         except Exception as e:
             elapsed = time.time() - t0
