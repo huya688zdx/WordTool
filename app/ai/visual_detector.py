@@ -9,30 +9,14 @@ from __future__ import annotations
 
 import base64
 import json
-import logging
 import re
 import time
-from pathlib import Path
 from typing import Optional
 
+from app.ai import get_ai_logger
 from app.ai.prompt_layout import SYSTEM_PROMPT_LAYOUT, make_layout_prompt
 
-# Dedicated logger for AI communication audit trail
-_ai_logger = logging.getLogger("wordagent.ai")
-_ai_logger.setLevel(logging.DEBUG)
-
-# File handler — written to data/logs/
-_log_dir = Path("./data/logs")
-_log_dir.mkdir(parents=True, exist_ok=True)
-_fh = logging.FileHandler(_log_dir / "ai_requests.log", encoding="utf-8")
-_fh.setLevel(logging.DEBUG)
-_fh.setFormatter(logging.Formatter(
-    "%(asctime)s [%(levelname)s] %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-))
-_ai_logger.addHandler(_fh)
-# Also propagate to stderr for console visibility
-_ai_logger.addHandler(logging.StreamHandler())
+_ai_logger = get_ai_logger()
 
 
 class VisualPageDetector:
@@ -40,10 +24,15 @@ class VisualPageDetector:
 
     def __init__(self, api_key: str, base_url: str, model: str):
         from openai import OpenAI
+        from app.ai import make_http_client
         self.api_key = api_key
         self.base_url = base_url
         self.model = model
-        self._client = OpenAI(api_key=api_key, base_url=base_url)
+        self._client = OpenAI(
+            api_key=api_key,
+            base_url=base_url,
+            http_client=make_http_client(),
+        )
 
     def detect(
         self,

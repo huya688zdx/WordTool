@@ -1,11 +1,11 @@
 import json
-import logging
 from typing import Optional
 
+from app.ai import get_ai_logger
 from app.ai.client import LLMClient
 from app.ai.prompt_templates import SYSTEM_PROMPT, make_analysis_prompt
 
-logger = logging.getLogger(__name__)
+_log = get_ai_logger()
 
 
 class RequirementAnalyzer:
@@ -19,15 +19,8 @@ class RequirementAnalyzer:
         paragraph_text: str,
         code_context: str = "",
     ) -> str:
-        """Analyze a requirement paragraph and return structured analysis.
+        _log.info("Analyzing requirement paragraph (%d chars)", len(paragraph_text))
 
-        Args:
-            paragraph_text: The requirement text from the document
-            code_context: Optional code context for impact analysis
-
-        Returns:
-            Analysis result as markdown text
-        """
         messages = [
             {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": make_analysis_prompt(paragraph_text, code_context)},
@@ -35,9 +28,10 @@ class RequirementAnalyzer:
 
         try:
             response = self.client.chat(messages)
+            _log.info("Analysis completed (%d chars)", len(response))
             return response
         except Exception as e:
-            logger.error(f"Analysis failed: {e}")
+            _log.error("Analysis failed: %s", e)
             return f"分析失败: {e}"
 
 

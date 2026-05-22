@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import json
-import logging
 import re
 import time
 
-_log = logging.getLogger(__name__)
+from app.ai import get_ai_logger
+
+_log = get_ai_logger()
 
 HEADING_DETECT_PROMPT = """You are a document structure analyst. Review paragraphs from a Chinese technical document and identify ones that SHOULD be headings but are currently marked as · (normal text, Lv=0).
 
@@ -62,8 +63,12 @@ Format: [index] marker | full_text
 Find ALL · (Lv=0) paragraphs that look like headings.
 Return ONLY JSON corrections."""
 
-    client = OpenAI(api_key=api_key, base_url=base_url)
-    _log.info("AI heading detect: sending %d paragraphs to %s", len(paragraphs), model)
+    from app.ai import make_http_client
+    client = OpenAI(api_key=api_key, base_url=base_url, http_client=make_http_client())
+    request_id = f"heading-{int(time.time() * 1000)}"
+    _log.info("[REQ %s] model=%s base_url=%s paragraphs=%d", request_id, model, base_url, len(paragraphs))
+    _log.debug("[REQ %s] system_prompt=%s", request_id, HEADING_DETECT_PROMPT[:200])
+    _log.debug("[REQ %s] user_prompt=%s", request_id, user_prompt[:500])
 
     t0 = time.time()
     try:
@@ -78,7 +83,12 @@ Return ONLY JSON corrections."""
         )
         elapsed = time.time() - t0
         content = response.choices[0].message.content or ""
-        _log.info("AI heading detect: %.1fs, response: %s", elapsed, content[:300])
+        usage = response.usage
+        _log.info("[RES %s] elapsed=%.1fs tokens_in=%d tokens_out=%d",
+                   request_id, elapsed,
+                   usage.prompt_tokens if usage else 0,
+                   usage.completion_tokens if usage else 0)
+        _log.debug("[RES %s] content=%s", request_id, content[:500])
 
         # Parse JSON
         json_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', content, re.DOTALL)
@@ -91,9 +101,12 @@ Return ONLY JSON corrections."""
 
         data = json.loads(json_str)
         corrections = data.get("corrections", [])
-        _log.info("AI heading detect: %d corrections", len(corrections))
+        _log.info("[RES %s] %d heading corrections", request_id, len(corrections))
+        for c in corrections:
+            _log.debug("[RES %s]   index=%d level=%d reason=%s",
+                        request_id, c.get("index"), c.get("heading_level"), c.get("reason", ""))
         return corrections
 
     except Exception as e:
-        _log.error("AI heading detect failed: %s", e)
+        _log.error("[ERR %s] heading detect failed: %s", request_id, e)
         return []
