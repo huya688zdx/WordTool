@@ -151,7 +151,7 @@ Return ONLY JSON corrections. Include ALL paragraphs whose heading_level needs t
                 {"role": "user", "content": user_prompt},
             ],
             temperature=0.3,
-            max_tokens=4096,
+            max_tokens=16384,
         )
         elapsed = time.time() - t0
         content = response.choices[0].message.content or ""
@@ -162,11 +162,16 @@ Return ONLY JSON corrections. Include ALL paragraphs whose heading_level needs t
                    usage.completion_tokens if usage else 0)
         _log.debug("[RES %s] content=%s", request_id, content[:500])
 
-        _conv_log.info("=== RES %s elapsed=%.1fs tokens_in=%d tokens_out=%d ===",
+        finish_reason = response.choices[0].finish_reason or ""
+        _conv_log.info("=== RES %s elapsed=%.1fs tokens_in=%d tokens_out=%d finish=%s ===",
                        request_id, elapsed,
                        usage.prompt_tokens if usage else 0,
-                       usage.completion_tokens if usage else 0)
+                       usage.completion_tokens if usage else 0,
+                       finish_reason)
         _conv_log.info("%s", content)
+
+        if finish_reason == "length":
+            _log.warning("[RES %s] output TRUNCATED by token limit!", request_id)
 
         # Parse JSON
         json_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', content, re.DOTALL)
@@ -185,8 +190,10 @@ Return ONLY JSON corrections. Include ALL paragraphs whose heading_level needs t
             _log.warning("[RES %s] empty JSON string", request_id)
             return []
 
-        data = json.loads(json_str)
-        corrections = data.get("corrections", [])
+        corrections = _parse_with_repair(json_str, request_id)
+        if corrections is None:
+            return []
+
         _log.info("[RES %s] %d heading corrections", request_id, len(corrections))
         for c in corrections:
             _log.debug("[RES %s]   index=%d level=%d reason=%s",
@@ -196,3 +203,39 @@ Return ONLY JSON corrections. Include ALL paragraphs whose heading_level needs t
     except Exception as e:
         _log.error("[ERR %s] heading detect failed: %s", request_id, e)
         return []
+
+
+def _parse_with_repair(json_str: str, request_id: str) -> list[dict] | None:
+    """Parse JSON, with progressive repair for truncated output. Returns None on total failure."""
+    try:
+        data = json.loads(json_str)
+        return data.get("corrections", [])
+    except json.JSONDecodeError as e:
+        _log.warning("[RES %s] JSON parse failed (will try repair): %s", request_id, str(e))
+
+    in_string = json_str.count('"') % 2 == 1
+    open_braces = json_str.count("{") - json_str.count("}")
+    open_brackets = json_str.count("[") - json_str.count("]")
+
+    attempts = []
+    if in_string:
+        attempts.extend([json_str + '"}', json_str + ']"}', json_str + '"}]}'])
+    suffix = "]" * open_brackets + "}" * open_braces
+    if suffix:
+        attempts.append(json_str + suffix)
+    last_comma = json_str.rfind(",")
+    if last_comma > 0 and open_braces > 0:
+        attempts.append(json_str[:last_comma] + "}]}")
+
+    for attempt in attempts:
+        try:
+            data = json.loads(attempt)
+            corrections = data.get("corrections", [])
+            if corrections:
+                _log.info("[RES %s] JSON repaired: salvaged %d corrections", request_id, len(corrections))
+            return corrections
+        except json.JSONDecodeError:
+            continue
+
+    _log.warning("[RES %s] All JSON repair attempts failed. Raw: %s", request_id, json_str[:500])
+    return None

@@ -92,23 +92,30 @@ class VisualPageDetector:
                 model=self.model,
                 messages=messages,
                 temperature=0.1,
-                max_tokens=4096,
+                max_tokens=16384,
             )
             elapsed = time.time() - t0
             content = response.choices[0].message.content or ""
+            finish_reason = response.choices[0].finish_reason or ""
             usage = response.usage
             _ai_logger.info(
-                "[RES %s] elapsed=%.1fs tokens_in=%d tokens_out=%d",
+                "[RES %s] elapsed=%.1fs tokens_in=%d tokens_out=%d finish=%s",
                 request_id, elapsed,
                 usage.prompt_tokens if usage else 0,
                 usage.completion_tokens if usage else 0,
+                finish_reason,
             )
 
-            _conv_logger.info("=== RES %s elapsed=%.1fs tokens_in=%d tokens_out=%d ===",
+            _conv_logger.info("=== RES %s elapsed=%.1fs tokens_in=%d tokens_out=%d finish=%s ===",
                               request_id, elapsed,
                               usage.prompt_tokens if usage else 0,
-                              usage.completion_tokens if usage else 0)
+                              usage.completion_tokens if usage else 0,
+                              finish_reason)
             _conv_logger.info("%s", content)
+
+            if finish_reason == "length":
+                _ai_logger.warning("[RES %s] output TRUNCATED by token limit! Trying to salvage...",
+                                   request_id)
 
             corrections = self._parse_corrections(content)
             _ai_logger.info("[RES %s] %d heading corrections", request_id, len(corrections))
@@ -124,7 +131,10 @@ class VisualPageDetector:
 
     @staticmethod
     def _parse_corrections(content: str) -> list[dict]:
-        """Extract heading corrections from AI response JSON."""
+        """Extract heading corrections from AI response JSON.
+
+        Handles truncated JSON by trying to repair missing brackets.
+        """
         json_match = re.search(r'```(?:json)?\s*\n?(.*?)\n?```', content, re.DOTALL)
         if json_match:
             json_str = json_match.group(1).strip()
@@ -140,9 +150,48 @@ class VisualPageDetector:
             _ai_logger.warning("Empty JSON in visual heading response")
             return []
 
+        # Try parsing, with progressive repair for truncated JSON
         try:
             data = json.loads(json_str)
             return data.get("corrections", [])
-        except json.JSONDecodeError:
-            _ai_logger.warning("Failed to parse visual heading JSON: %s", content[:300])
-            return []
+        except json.JSONDecodeError as e:
+            _ai_logger.warning("JSON parse failed (will try repair): %s", str(e))
+
+        # Attempt repair: close unclosed brackets/braces
+        for repair in _repair_attempts(json_str):
+            try:
+                data = json.loads(repair)
+                corrections = data.get("corrections", [])
+                if corrections:
+                    _ai_logger.info("JSON repaired: salvaged %d corrections", len(corrections))
+                return corrections
+            except json.JSONDecodeError:
+                continue
+
+        _ai_logger.warning("All JSON repair attempts failed. Raw: %s", content[:500])
+        return []
+
+
+def _repair_attempts(json_str: str):
+    """Generate repair attempts for truncated JSON by closing open brackets."""
+    # Count open vs close
+    open_braces = json_str.count("{") - json_str.count("}")
+    open_brackets = json_str.count("[") - json_str.count("]")
+    # Check if inside a string (unclosed quote)
+    in_string = json_str.count('"') % 2 == 1
+    base = json_str
+
+    if in_string:
+        yield base + '"}'
+        yield base + ']"}'
+        yield base + '"}]}'
+        yield base.rstrip('"') + '}]}'
+
+    # Close brackets then braces
+    suffix = "]" * open_brackets + "}" * open_braces
+    if suffix:
+        yield base + suffix
+    # Also try trimming to last valid item then closing
+    last_comma = base.rfind(",")
+    if last_comma > 0 and open_braces > 0:
+        yield base[:last_comma] + "}]}"
