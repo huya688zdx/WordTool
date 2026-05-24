@@ -1,6 +1,6 @@
 import logging
 import time
-from typing import List, Dict, Optional
+from typing import Any, List, Dict, Optional
 
 from openai import OpenAI
 
@@ -9,6 +9,11 @@ from app.ai import get_ai_logger, get_conv_logger, make_http_client
 logger = logging.getLogger(__name__)
 _ai_log = get_ai_logger()
 _conv_log = get_conv_logger()
+
+
+def _is_response_format_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "response_format" in msg or "json_object" in msg
 
 
 class LLMClient:
@@ -47,7 +52,13 @@ class LLMClient:
             http_client=make_http_client(),
         )
 
-    def chat(self, messages: List[Dict[str, str]], temperature: float = 0.3) -> str:
+    def chat(
+        self,
+        messages: List[Dict[str, Any]],
+        temperature: float = 0.3,
+        max_tokens: Optional[int] = None,
+        response_format: Optional[Dict[str, str]] = None,
+    ) -> str:
         request_id = f"req-{int(time.time() * 1000)}"
         _ai_log.info(
             "[REQ %s] model=%s base_url=%s temperature=%.2f",
@@ -70,11 +81,27 @@ class LLMClient:
 
         t0 = time.time()
         try:
-            response = self._client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=temperature,
-            )
+            request_kwargs: Dict[str, Any] = {
+                "model": self.model,
+                "messages": messages,
+                "temperature": temperature,
+            }
+            if max_tokens is not None:
+                request_kwargs["max_tokens"] = max_tokens
+            if response_format is not None:
+                request_kwargs["response_format"] = response_format
+
+            try:
+                response = self._client.chat.completions.create(**request_kwargs)
+            except Exception as e:
+                if response_format is None or not _is_response_format_error(e):
+                    raise
+                _ai_log.warning(
+                    "[REQ %s] provider rejected response_format; retrying without it",
+                    request_id,
+                )
+                request_kwargs.pop("response_format", None)
+                response = self._client.chat.completions.create(**request_kwargs)
             elapsed = time.time() - t0
             content = response.choices[0].message.content or ""
             usage = response.usage

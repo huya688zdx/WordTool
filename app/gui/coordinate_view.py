@@ -78,11 +78,14 @@ class CoordinateView(QGroupBox):
     def _update_paragraph_screenshot(self):
         if self._last_pdf_path and self._last_coord:
             try:
-                image_bytes = self._cropper.crop_paragraph(
-                    self._last_pdf_path, self._last_coord.page_number,
-                    (self._last_coord.bbox_x0, self._last_coord.bbox_y0,
-                     self._last_coord.bbox_x1, self._last_coord.bbox_y1),
-                    padding=15, zoom=self._zoom,
+                image_bytes = self._cropper.crop_union(
+                    self._last_pdf_path,
+                    self._last_coord.page_number,
+                    [(self._last_coord.bbox_x0, self._last_coord.bbox_y0,
+                      self._last_coord.bbox_x1, self._last_coord.bbox_y1)],
+                    padding=15,
+                    zoom=self._zoom,
+                    expand_to_content_width=True,
                 )
                 pixmap = QPixmap()
                 pixmap.loadFromData(image_bytes)
@@ -105,7 +108,7 @@ class CoordinateView(QGroupBox):
                 return
             image_bytes = self._cropper.crop_union(
                 self._last_pdf_path, page, bboxes,
-                padding=10, zoom=self._zoom,
+                padding=10, zoom=self._zoom, expand_to_content_width=True,
             )
             pixmap = QPixmap()
             pixmap.loadFromData(image_bytes)

@@ -11,6 +11,12 @@ from app.ai import get_ai_logger, get_conv_logger
 _log = get_ai_logger()
 _conv_log = get_conv_logger()
 
+
+def _is_response_format_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "response_format" in msg or "json_object" in msg
+
+
 HEADING_DETECT_PROMPT = """You are a document structure proofreader. Word COM has pre-assigned heading levels, but its detection is seriously broken. Your job: analyze the document's REAL logical structure, then fix heading levels.
 
 ## Step 1 — Analyze Document Structure FIRST
@@ -144,15 +150,24 @@ Return ONLY JSON corrections. Include ALL paragraphs whose heading_level needs t
 
     t0 = time.time()
     try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
+        request_kwargs = {
+            "model": model,
+            "messages": [
                 {"role": "system", "content": HEADING_DETECT_PROMPT},
                 {"role": "user", "content": user_prompt},
             ],
-            temperature=0.3,
-            max_tokens=16384,
-        )
+            "temperature": 0.2,
+            "max_tokens": 16384,
+            "response_format": {"type": "json_object"},
+        }
+        try:
+            response = client.chat.completions.create(**request_kwargs)
+        except Exception as e:
+            if not _is_response_format_error(e):
+                raise
+            _log.warning("[REQ %s] provider rejected response_format; retrying without it", request_id)
+            request_kwargs.pop("response_format", None)
+            response = client.chat.completions.create(**request_kwargs)
         elapsed = time.time() - t0
         content = response.choices[0].message.content or ""
         usage = response.usage

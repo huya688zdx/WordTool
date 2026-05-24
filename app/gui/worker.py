@@ -364,64 +364,76 @@ class PipelineWorker(QThread):
         ).order_by(Paragraph.para_index).all()
 
         word_positions = getattr(self, "_word_positions", None)
+        para_by_index = {p.para_index: p for p in paragraphs}
+
+        # Prefer bboxes extracted from the rendered PDF itself. Word COM is
+        # still useful for rendering and page hints, but Range.Information()
+        # does not expose a real paragraph rectangle, so its y1 is only an
+        # estimate and tends to over/under-crop screenshots.
+        from app.parser.docx_parser import ParagraphData
+        para_data_list = [
+            ParagraphData(
+                para_index=p.para_index,
+                full_text=p.full_text,
+                style_name=p.style_name,
+                heading_level=p.heading_level,
+                has_highlights=p.has_highlights,
+                has_revisions=p.has_revisions,
+                is_deleted=p.is_deleted,
+                is_image=p.is_image,
+            )
+            for p in paragraphs
+        ]
+
+        pdf_path = storage.get_path(doc.pdf_storage_key)
+        mappings = map_paragraphs_to_pdf(para_data_list, str(pdf_path))
+        mapped_indices = set()
+        if mappings:
+            print(f"[对齐] 使用 PDF 文本坐标映射 {len(mappings)} 个段落")
+            self.progress.emit(f"对齐: 使用 PDF 文本坐标 ({len(mappings)} 段落)")
+
+        for mapping in mappings:
+            para = para_by_index.get(mapping.paragraph_id)
+            if not para:
+                continue
+            mapped_indices.add(mapping.paragraph_id)
+            coord = PDFCoordinate(
+                document_id=doc.id,
+                paragraph_id=para.id,
+                page_number=mapping.page_number,
+                bbox_x0=mapping.bbox[0],
+                bbox_y0=mapping.bbox[1],
+                bbox_x1=mapping.bbox[2],
+                bbox_y1=mapping.bbox[3],
+                match_confidence=mapping.confidence,
+                match_strategy=mapping.strategy,
+            )
+            db.add(coord)
 
         if word_positions:
-            # Word COM positions are the most accurate — always use them
-            print(f"[对齐] 使用 Word COM 提取的 {len(word_positions)} 个段落精确坐标")
-            self.progress.emit(f"对齐: 使用 Word COM 精确坐标 ({len(word_positions)} 段落)")
+            fallback_count = 0
             for wp in word_positions:
                 pi = wp.get("para_index", 0)
-                para = next((p for p in paragraphs if p.para_index == pi), None)
-                if para:
-                    coord = PDFCoordinate(
-                        document_id=doc.id,
-                        paragraph_id=para.id,
-                        page_number=wp["page"],
-                        bbox_x0=wp["x0"],
-                        bbox_y0=wp["y0"],
-                        bbox_x1=wp["x1"],
-                        bbox_y1=wp["y1"],
-                        match_confidence=1.0,
-                        match_strategy="word_com",
-                    )
-                    db.add(coord)
-        else:
-            # Fallback: text search + position estimation
-            from app.parser.docx_parser import ParagraphData
-            para_data_list = []
-            for p in paragraphs:
-                pd = ParagraphData(
-                    para_index=p.para_index,
-                    full_text=p.full_text,
-                    style_name=p.style_name,
-                    heading_level=p.heading_level,
-                    has_highlights=p.has_highlights,
-                    has_revisions=p.has_revisions,
-                    is_deleted=p.is_deleted,
-                    is_image=p.is_image,
+                if pi in mapped_indices:
+                    continue
+                para = para_by_index.get(pi)
+                if not para:
+                    continue
+                fallback_count += 1
+                coord = PDFCoordinate(
+                    document_id=doc.id,
+                    paragraph_id=para.id,
+                    page_number=wp["page"],
+                    bbox_x0=wp["x0"],
+                    bbox_y0=wp["y0"],
+                    bbox_x1=wp["x1"],
+                    bbox_y1=wp["y1"],
+                    match_confidence=0.35,
+                    match_strategy="word_com_fallback",
                 )
-                para_data_list.append(pd)
-
-            pdf_path = storage.get_path(doc.pdf_storage_key)
-            mappings = map_paragraphs_to_pdf(para_data_list, str(pdf_path))
-            for mapping in mappings:
-                para = next(
-                    (p for p in paragraphs if p.para_index == mapping.paragraph_id),
-                    None
-                )
-                if para:
-                    coord = PDFCoordinate(
-                        document_id=doc.id,
-                        paragraph_id=para.id,
-                        page_number=mapping.page_number,
-                        bbox_x0=mapping.bbox[0],
-                        bbox_y0=mapping.bbox[1],
-                        bbox_x1=mapping.bbox[2],
-                        bbox_y1=mapping.bbox[3],
-                        match_confidence=mapping.confidence,
-                        match_strategy=mapping.strategy,
-                    )
-                    db.add(coord)
+                db.add(coord)
+            if fallback_count:
+                print(f"[对齐] PDF 未匹配段落使用 Word COM 兜底 {fallback_count} 个")
 
         doc.status = "aligned"
         db.flush()

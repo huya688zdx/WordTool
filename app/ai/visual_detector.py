@@ -19,6 +19,11 @@ _ai_logger = get_ai_logger()
 _conv_logger = get_conv_logger()
 
 
+def _is_response_format_error(exc: Exception) -> bool:
+    msg = str(exc).lower()
+    return "response_format" in msg or "json_object" in msg
+
+
 class VisualPageDetector:
     """Verify heading levels on a page using a vision model."""
 
@@ -88,12 +93,24 @@ class VisualPageDetector:
 
         t0 = time.time()
         try:
-            response = self._client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=0.1,
-                max_tokens=16384,
-            )
+            request_kwargs = {
+                "model": self.model,
+                "messages": messages,
+                "temperature": 0.1,
+                "max_tokens": 16384,
+                "response_format": {"type": "json_object"},
+            }
+            try:
+                response = self._client.chat.completions.create(**request_kwargs)
+            except Exception as e:
+                if not _is_response_format_error(e):
+                    raise
+                _ai_logger.warning(
+                    "[REQ %s] provider rejected response_format; retrying without it",
+                    request_id,
+                )
+                request_kwargs.pop("response_format", None)
+                response = self._client.chat.completions.create(**request_kwargs)
             elapsed = time.time() - t0
             content = response.choices[0].message.content or ""
             finish_reason = response.choices[0].finish_reason or ""

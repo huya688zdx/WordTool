@@ -33,22 +33,22 @@ class PageCropper:
         doc = fitz.open(str(pdf_path))
         try:
             page = doc[page_number - 1]
-            page_w = page.rect.width
-
-            # Expand horizontally to capture full text column width.
-            # The detected bbox may be tight around characters, but we want
-            # the full column width including whitespace on both sides.
-            h_padding = max(padding, page_w * 0.05)  # at least 5% page width
+            # Keep the crop close to the detected PDF bbox.  Older alignment
+            # used wide COM-derived rectangles, so widening again here often
+            # made screenshots include neighboring text.
+            h_padding = padding
             v_padding = padding
 
             rect = fitz.Rect(bbox) + (
                 -h_padding, -v_padding, h_padding, v_padding
             )
 
-            # Clamp to page bounds but prefer wider width
+            # Clamp to page bounds.
             page_rect = page.rect
-            rect.x0 = max(page_rect.x0 + 5, rect.x0)   # leave 5pt margin from page edge
-            rect.x1 = min(page_rect.x1 - 5, rect.x1)
+            rect.x0 = max(page_rect.x0, rect.x0)
+            rect.y0 = max(page_rect.y0, rect.y0)
+            rect.x1 = min(page_rect.x1, rect.x1)
+            rect.y1 = min(page_rect.y1, rect.y1)
 
             mat = fitz.Matrix(zoom, zoom)
             pix = page.get_pixmap(clip=rect, matrix=mat)
@@ -80,6 +80,7 @@ class PageCropper:
         bboxes: list,
         padding: float = 10.0,
         zoom: float = 2.0,
+        expand_to_content_width: bool = False,
     ) -> bytes:
         """Crop the union bounding box of multiple bboxes on a single page.
 
@@ -101,7 +102,40 @@ class PageCropper:
             union[1] = min(union[1], b[1])
             union[2] = max(union[2], b[2])
             union[3] = max(union[3], b[3])
+        if expand_to_content_width:
+            union = self._expand_to_content_width(pdf_path, page_number, tuple(union))
         return self.crop_paragraph(pdf_path, page_number, tuple(union), padding, zoom)
+
+    def _expand_to_content_width(
+        self,
+        pdf_path: Path,
+        page_number: int,
+        bbox: Tuple[float, float, float, float],
+    ) -> Tuple[float, float, float, float]:
+        """Expand x bounds to the page's text column while keeping y bounds tight."""
+        doc = fitz.open(str(pdf_path))
+        try:
+            page = doc[page_number - 1]
+            target = fitz.Rect(bbox)
+            x0_values = []
+            x1_values = []
+
+            for block in page.get_text("blocks"):
+                if len(block) < 5:
+                    continue
+                block_rect = fitz.Rect(block[:4])
+                if block_rect.width < 20 or block_rect.height < 5:
+                    continue
+                if block_rect.y1 < target.y0 or block_rect.y0 > target.y1:
+                    continue
+                x0_values.append(block_rect.x0)
+                x1_values.append(block_rect.x1)
+
+            if not x0_values or not x1_values:
+                return bbox
+            return (min(x0_values), bbox[1], max(x1_values), bbox[3])
+        finally:
+            doc.close()
 
     def get_page_thumbnail(
         self,

@@ -2,18 +2,24 @@ from PySide6.QtWidgets import (
     QMainWindow, QSplitter, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QStatusBar, QMessageBox, QMenuBar,
     QGroupBox, QDockWidget, QDialog, QDialogButtonBox,
+    QTabWidget,
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QActionGroup
 
 from app.gui.i18n import I18n
 from app.gui.document_panel import DocumentPanel
-from app.gui.codebase_panel import CodebasePanel
+from app.gui.code_candidate_panel import CodeCandidatePanel
 from app.gui.pipeline_panel import PipelinePanel
 from app.gui.paragraph_view import ParagraphView
 from app.gui.coordinate_view import CoordinateView
 from app.gui.llm_config import LLMConfigWidget
 from app.gui.ai_analysis import AIAnalysisWidget
+from app.ai.document_context import (
+    build_document_context,
+    find_change_for_paragraph,
+    format_selected_context,
+)
 
 
 class MainWindow(QMainWindow):
@@ -21,6 +27,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         I18n.instance()
         self.llm_config = LLMConfigWidget()  # hidden, used via Settings menu
+        self._document_context = {}
         self._setup_ui()
         self._setup_menu()
         self._setup_statusbar()
@@ -41,9 +48,6 @@ class MainWindow(QMainWindow):
         self.document_panel = DocumentPanel()
         left_layout.addWidget(self.document_panel)
 
-        self.codebase_panel = CodebasePanel()
-        left_layout.addWidget(self.codebase_panel)
-
         self.pipeline_panel = PipelinePanel()
         left_layout.addWidget(self.pipeline_panel)
         left_layout.addStretch()
@@ -51,7 +55,12 @@ class MainWindow(QMainWindow):
         # Min width for left panel
         left_widget.setMinimumWidth(240)
 
-        # === Right panel (wide) ===
+        # === Right panel (wide): document workspace + code candidate workspace ===
+        self.workspace_tabs = QTabWidget()
+
+        document_tab = QWidget()
+        document_layout = QVBoxLayout(document_tab)
+        document_layout.setContentsMargins(0, 0, 0, 0)
         right_splitter = QSplitter(Qt.Vertical)
         self.paragraph_view = ParagraphView()
         right_splitter.addWidget(self.paragraph_view)
@@ -59,9 +68,14 @@ class MainWindow(QMainWindow):
         right_splitter.addWidget(self.coordinate_view)
         # Paragraph view gets more space
         right_splitter.setSizes([500, 350])
+        document_layout.addWidget(right_splitter)
+
+        self.code_candidate_panel = CodeCandidatePanel()
+        self.workspace_tabs.addTab(document_tab, "文档改动点")
+        self.workspace_tabs.addTab(self.code_candidate_panel, "代码候选")
 
         main_splitter.addWidget(left_widget)
-        main_splitter.addWidget(right_splitter)
+        main_splitter.addWidget(self.workspace_tabs)
         # Left panel ~250px, rest for right
         main_splitter.setSizes([260, 1100])
         main_splitter.setStretchFactor(0, 0)  # left: don't stretch
@@ -128,10 +142,10 @@ class MainWindow(QMainWindow):
         self.about_action.setText(I18n.tr("menu.help.about"))
         self.statusbar.showMessage(I18n.tr("statusbar.ready"))
         self.document_panel.refresh_text()
-        self.codebase_panel.refresh_text()
         self.pipeline_panel.refresh_text()
         self.paragraph_view.refresh_text()
         self.coordinate_view.refresh_text()
+        self.code_candidate_panel.refresh_text()
         self.ai_analysis.refresh_text()
         bottom = self.findChild(QDockWidget)
         if bottom:
@@ -173,18 +187,32 @@ class MainWindow(QMainWindow):
 
     def _on_document_selected(self, document_id: str):
         self.statusbar.showMessage(f"Loading document {document_id}...")
+        self._document_context = build_document_context(document_id)
         self.paragraph_view.load_paragraphs(document_id)
 
     def _on_document_deleted(self, document_id: str):
         # Clear paragraph view and coordinate view when the displayed document is deleted
         self.paragraph_view.clear()
         self.coordinate_view.clear()
+        self._document_context = {}
 
     def _on_paragraph_selected(self, paragraph_id: str, document_id: str):
         self.coordinate_view.load_coordinates(paragraph_id, document_id)
+        para_index, text = self._load_paragraph_info(paragraph_id)
+        change = find_change_for_paragraph(self._document_context, paragraph_id)
+        label = change["id"] if change else f"PARA-{para_index:03d}"
+        prompt_text = format_selected_context(self._document_context, label, text) if self._document_context else text
+        self.ai_analysis.set_paragraph_text(prompt_text)
+        self.code_candidate_panel.set_change_context(label, text)
 
     def _on_section_selected(self, section_node, document_id: str):
         self.coordinate_view.load_section_coordinates(section_node, document_id)
+        text = self._load_section_text(section_node, document_id)
+        label = f"SEC-{section_node.para_index:03d}"
+        title = f"{label} {section_node.title}" if section_node.title else label
+        prompt_text = format_selected_context(self._document_context, title, text) if self._document_context else text
+        self.ai_analysis.set_paragraph_text(prompt_text)
+        self.code_candidate_panel.set_change_context(title, text)
 
     def _on_analysis_requested(self, paragraph_text: str):
         api_key = self.llm_config.get_api_key()
@@ -197,7 +225,7 @@ class MainWindow(QMainWindow):
 
         code_context = ""
         if self.ai_analysis.use_code_context():
-            code_context = self.codebase_panel.get_selected_code()
+            code_context = self.code_candidate_panel.get_selected_code()
 
         self.ai_analysis.run_analysis(
             api_key=api_key, base_url=base_url, model=model,
@@ -206,3 +234,32 @@ class MainWindow(QMainWindow):
 
     def _show_about(self):
         QMessageBox.about(self, I18n.tr("about.title"), I18n.tr("about.text"))
+
+    def _load_paragraph_info(self, paragraph_id: str) -> tuple[int, str]:
+        from app.models.base import get_session_factory
+        from app.models.paragraph import Paragraph
+
+        db = get_session_factory()()
+        try:
+            para = db.query(Paragraph).filter(Paragraph.id == paragraph_id).first()
+            return (para.para_index, para.full_text) if para else (0, "")
+        finally:
+            db.close()
+
+    def _load_section_text(self, section_node, document_id: str) -> str:
+        from app.models.base import get_session_factory
+        from app.models.paragraph import Paragraph
+
+        para_ids = section_node.all_paragraph_ids()
+        if not para_ids:
+            return section_node.title or ""
+
+        db = get_session_factory()()
+        try:
+            paragraphs = db.query(Paragraph).filter(
+                Paragraph.document_id == document_id,
+                Paragraph.id.in_(para_ids),
+            ).order_by(Paragraph.para_index).all()
+            return "\n".join(p.full_text for p in paragraphs if p.full_text)
+        finally:
+            db.close()

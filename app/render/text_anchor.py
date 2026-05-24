@@ -12,7 +12,11 @@ from app.layout.page_model import (
 )
 from app.parser.docx_parser import ParagraphData
 from app.render.pdf_parser import PDFParser
-from app.utils.text_normalize import normalize_for_matching, extract_search_tokens
+from app.utils.text_normalize import (
+    normalize_for_matching,
+    normalize_whitespace,
+    extract_search_tokens,
+)
 from app.config.settings import settings
 
 logger = logging.getLogger(__name__)
@@ -261,12 +265,14 @@ class TextAnchorMapper:
         if not normalized_text:
             return None
 
-        mapping = self._strategy_full_text(para, normalized_text, doc)
+        search_text = normalize_whitespace(para.full_text)
+
+        mapping = self._strategy_full_text(para, normalized_text, search_text, doc)
         if mapping:
             logger.debug(f"Para {para.para_index}: full_text")
             return mapping
 
-        mapping = self._strategy_chunked(para, normalized_text, doc)
+        mapping = self._strategy_chunked(para, normalized_text, search_text, doc)
         if mapping:
             logger.debug(f"Para {para.para_index}: chunked")
             return mapping
@@ -283,6 +289,7 @@ class TextAnchorMapper:
         self,
         para: ParagraphData,
         normalized_text: str,
+        search_text: str,
         doc: fitz.Document,
     ) -> Optional[CoordinateMapping]:
         if len(normalized_text) > 200:
@@ -295,7 +302,7 @@ class TextAnchorMapper:
             if page_num < self._cursor_page:
                 continue
 
-            rects = page.search_for(normalized_text)
+            rects = self._search_variants(page, search_text, normalized_text)
             if rects:
                 valid_rects = []
                 for rect in rects:
@@ -304,7 +311,7 @@ class TextAnchorMapper:
                     valid_rects.append(rect)
 
                 if valid_rects:
-                    bbox = self._merge_rects(valid_rects)
+                    bbox = self._select_first_match_rect(valid_rects, normalized_text)
                     return CoordinateMapping(
                         paragraph_id=para.para_index,
                         page_number=page_num,
@@ -315,15 +322,61 @@ class TextAnchorMapper:
 
         return None
 
+    def _select_first_match_rect(self, rects: List[fitz.Rect], text: str) -> fitz.Rect:
+        """Return the first occurrence instead of merging repeated matches.
+
+        PyMuPDF returns every occurrence for short text such as a heading
+        "现金流". Merging all occurrences makes the bbox span most of the page.
+        For long wrapped text, a single occurrence may contain adjacent line
+        rects, so keep only the first tight vertical group.
+        """
+        ordered = sorted(rects, key=lambda r: (round(r.y0, 1), round(r.x0, 1)))
+        if not ordered:
+            return fitz.Rect(0, 0, 0, 0)
+
+        if len(text.strip()) <= 20:
+            return ordered[0]
+
+        group = [ordered[0]]
+        for rect in ordered[1:]:
+            prev = group[-1]
+            line_height = max(prev.height, rect.height, 1.0)
+            vertical_gap = rect.y0 - prev.y1
+            if vertical_gap > max(line_height * 1.5, 8.0):
+                break
+            group.append(rect)
+        return self._merge_rects(group)
+
+    def _search_variants(
+        self,
+        page: fitz.Page,
+        search_text: str,
+        normalized_text: str,
+    ) -> List[fitz.Rect]:
+        """Search using PDF-preserving text first, normalized text second."""
+        variants = []
+        for text in (search_text, normalized_text):
+            text = text.strip()
+            if text and text not in variants:
+                variants.append(text)
+        for text in variants:
+            rects = page.search_for(text)
+            if rects:
+                return rects
+        return []
+
     def _strategy_chunked(
         self,
         para: ParagraphData,
         normalized_text: str,
+        search_text: str,
         doc: fitz.Document,
     ) -> Optional[CoordinateMapping]:
         from app.utils.text_normalize import chunk_text
 
-        chunks = chunk_text(normalized_text, self._chunk_size)
+        chunk_size = min(self._chunk_size, 18) if self._looks_cjk(search_text) else self._chunk_size
+        chunks = chunk_text(search_text, chunk_size)
+        normalized_chunks = chunk_text(normalized_text, chunk_size)
         if not chunks:
             return None
 
@@ -338,10 +391,11 @@ class TextAnchorMapper:
             page_rects = []
             page_matched = 0
 
-            for chunk in chunks:
+            for idx, chunk in enumerate(chunks):
                 if not chunk.strip():
                     continue
-                rects = page.search_for(chunk)
+                normalized_chunk = normalized_chunks[idx] if idx < len(normalized_chunks) else chunk
+                rects = self._search_variants(page, chunk, normalized_chunk)
                 if rects:
                     # Filter rects below cursor on the current page
                     valid = []
@@ -350,7 +404,7 @@ class TextAnchorMapper:
                             continue
                         valid.append(r)
                     if valid:
-                        page_rects.extend(valid)
+                        page_rects.append(self._select_first_match_rect(valid, chunk))
                         page_matched += 1
 
             if page_matched > matched_chunks:
@@ -363,17 +417,26 @@ class TextAnchorMapper:
 
         if best_page and matched_chunks > 0:
             confidence = matched_chunks / total_chunks
-            if confidence >= self._min_confidence:
+            enough_long_hits = len(normalized_text) > 80 and matched_chunks >= min(3, total_chunks)
+            if confidence >= self._min_confidence or enough_long_hits:
                 bbox = self._merge_rects(best_rects)
                 return CoordinateMapping(
                     paragraph_id=para.para_index,
                     page_number=best_page,
                     bbox=(bbox.x0, bbox.y0, bbox.x1, bbox.y1),
-                    confidence=confidence,
+                    confidence=max(confidence, 0.65) if enough_long_hits else confidence,
                     strategy="chunked",
                 )
 
         return None
+
+    @staticmethod
+    def _looks_cjk(text: str) -> bool:
+        chars = [c for c in text if not c.isspace()]
+        if not chars:
+            return False
+        cjk = sum(1 for c in chars if "\u4e00" <= c <= "\u9fff")
+        return cjk / len(chars) > 0.3
 
     def _strategy_word_sequence(
         self,

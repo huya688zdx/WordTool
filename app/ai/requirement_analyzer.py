@@ -27,7 +27,11 @@ class RequirementAnalyzer:
         ]
 
         try:
-            response = self.client.chat(messages)
+            response = self.client.chat(
+                messages,
+                temperature=0.2,
+                response_format={"type": "json_object"},
+            )
             _log.info("Analysis completed (%d chars)", len(response))
             return response
         except Exception as e:
