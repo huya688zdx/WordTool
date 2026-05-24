@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
 )
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QActionGroup
+from typing import Tuple
 
 from app.gui.i18n import I18n
 from app.gui.document_panel import DocumentPanel
@@ -235,7 +236,7 @@ class MainWindow(QMainWindow):
     def _show_about(self):
         QMessageBox.about(self, I18n.tr("about.title"), I18n.tr("about.text"))
 
-    def _load_paragraph_info(self, paragraph_id: str) -> tuple[int, str]:
+    def _load_paragraph_info(self, paragraph_id: str) -> Tuple[int, str]:
         from app.models.base import get_session_factory
         from app.models.paragraph import Paragraph
 
